@@ -21,6 +21,10 @@
 #include <rex/graphics/vulkan/graphics_system.h>
 #endif
 
+namespace rex::graphics::null {
+system::IGraphicsSystem* CreateNullGraphicsSystem();
+}
+
 extern "C" REX_GPU_PLUGIN_EXPORT uint32_t rex_gpu_abi_version(void) {
   return rex::system::kGpuPluginAbiVersion;
 }
@@ -38,6 +42,10 @@ extern "C" REX_GPU_PLUGIN_EXPORT rex::system::IGraphicsSystem* rex_gpu_create(
   }
 
   std::string_view backend = info->backend ? info->backend : "any";
+  // Only on request: processes the command stream without rendering.
+  if (backend == "null") {
+    return rex::graphics::null::CreateNullGraphicsSystem();
+  }
 #if REX_HAS_D3D12
   if (backend == "any" || backend == "d3d12") {
     return new rex::graphics::d3d12::D3D12GraphicsSystem();

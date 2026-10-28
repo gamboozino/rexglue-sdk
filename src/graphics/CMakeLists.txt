@@ -28,6 +28,7 @@ set(REXGPU_XENOS_SOURCES
     pipeline/shader/interpreter.cpp
     pipeline/shader/translator.cpp
     pipeline/shader/translator_disasm.cpp
+    null/graphics_system.cpp
 )
 
 # SPIR-V shader translation
