@@ -38,9 +38,10 @@ void MergeInto(X_INPUT_STATE& dst, const X_INPUT_STATE& src) {
   dst.gamepad.thumb_rx = LargerMagnitude(dst.gamepad.thumb_rx, src.gamepad.thumb_rx);
   dst.gamepad.thumb_ry = LargerMagnitude(dst.gamepad.thumb_ry, src.gamepad.thumb_ry);
 
-  if (static_cast<uint32_t>(src.packet_number) > static_cast<uint32_t>(dst.packet_number)) {
-    dst.packet_number = src.packet_number;
-  }
+  // The sum changes whenever any device's number does; the larger of the two
+  // would hide changes on a device with a smaller count.
+  dst.packet_number =
+      static_cast<uint32_t>(dst.packet_number) + static_cast<uint32_t>(src.packet_number);
 }
 
 bool IsNeutral(const X_INPUT_GAMEPAD& gamepad) {
