@@ -483,6 +483,10 @@ FileMappingHandle CreateFileMappingHandle(const std::filesystem::path& path, siz
     shm_unlink(full_path.c_str());
     return kFileMappingHandleInvalid;
   }
+  // The descriptor keeps the memory alive and nothing reopens it by name, so
+  // drop the name now: a process that is killed would otherwise leave a
+  // multi-gigabyte file in /dev/shm behind.
+  shm_unlink(full_path.c_str());
   return static_cast<FileMappingHandle>(ret);
 #endif
 }
