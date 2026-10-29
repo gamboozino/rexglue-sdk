@@ -1269,35 +1269,40 @@ bool CommandProcessor::ExecutePacketType3_EVENT_WRITE_EXT(memory::RingBuffer* re
 
 bool CommandProcessor::ExecutePacketType3_EVENT_WRITE_ZPD(memory::RingBuffer* reader,
                                                           uint32_t packet, uint32_t count) {
-  // Set by D3D as BE but struct ABI is LE
-  const uint32_t kQueryFinished = rex::byte_swap(0xFFFFFEED);
   assert_true(count == 1);
   uint32_t initiator = reader->ReadAndSwap<uint32_t>();
   // Writeback initiator.
   WriteRegister(XE_GPU_REG_VGT_EVENT_INITIATOR, initiator & 0x3F);
 
-  // Occlusion queries:
-  // This command is send on query begin and end.
-  // As a workaround report some fixed amount of passed samples.
+  // Occlusion queries: D3D takes a query's samples as the end report minus
+  // the begin one (and QueryBatch subtracts adjacent snapshots), so each
+  // report gets a running total that grows by a fake count per interval,
+  // as Xenia's fake ZPD mode does. Zeroing begin reports and writing a count
+  // only at ends made batched intervals read as nothing drawn: objects culled
+  // by them came and went from frame to frame.
   auto fake_sample_count = REXCVAR_GET(query_occlusion_fake_sample_count);
   if (fake_sample_count >= 0) {
-    auto* pSampleCounts = memory_->TranslatePhysical<xe_gpu_depth_sample_counts*>(
-        register_file_->values[XE_GPU_REG_RB_SAMPLE_COUNT_ADDR]);
+    uint32_t address = register_file_->values[XE_GPU_REG_RB_SAMPLE_COUNT_ADDR];
+    auto* pSampleCounts =
+        address ? memory_->TranslatePhysical<xe_gpu_depth_sample_counts*>(address) : nullptr;
     if (!pSampleCounts) {
       return true;
     }
-    // 0xFFFFFEED is written to this two locations by D3D only on D3DISSUE_END
-    // and used to detect a finished query.
-    bool is_end_via_z_pass =
-        pSampleCounts->ZPass_A == kQueryFinished || pSampleCounts->ZPass_B == kQueryFinished;
-    // Older versions of D3D also checks for ZFail (4D5307D5).
-    bool is_end_via_z_fail =
-        pSampleCounts->ZFail_A == kQueryFinished || pSampleCounts->ZFail_B == kQueryFinished;
-    std::memset(pSampleCounts, 0, sizeof(xe_gpu_depth_sample_counts));
-    if (is_end_via_z_pass || is_end_via_z_fail) {
-      pSampleCounts->ZPass_A = fake_sample_count;
-      pSampleCounts->Total_A = fake_sample_count;
-    }
+    zpd_sample_counter_ += uint32_t(fake_sample_count);
+    // D3D sums the A and B lanes; some titles mask each to 24 bits.
+    uint32_t total = uint32_t(zpd_sample_counter_);
+    uint32_t lane_a = total - (total >> 1), lane_b = total >> 1;
+    pSampleCounts->Total_A = lane_a;
+    pSampleCounts->Total_B = lane_b;
+    pSampleCounts->ZFail_A = 0;
+    pSampleCounts->ZFail_B = 0;
+    // ZPass holds the marker GetData polls on: written last, in one go, so a
+    // guest thread never sees a finished report with the old counts.
+    xe_gpu_depth_sample_counts tail = {};
+    tail.ZPass_A = lane_a;
+    tail.ZPass_B = lane_b;
+    std::memcpy(&pSampleCounts->ZPass_A, &tail.ZPass_A,
+                sizeof(tail) - offsetof(xe_gpu_depth_sample_counts, ZPass_A));
   }
 
   return true;

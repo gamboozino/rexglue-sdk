@@ -264,6 +264,10 @@ class CommandProcessor {
   // them instead of dropping the write entirely.
   std::unordered_map<uint32_t, uint32_t> extended_register_values_;
 
+  // Running total of the fake occlusion query samples (EVENT_WRITE_ZPD),
+  // touched only by packet execution on the worker thread.
+  uint64_t zpd_sample_counter_ = 0;
+
   uint64_t bin_select_ = 0xFFFFFFFFull;
   uint64_t bin_mask_ = 0xFFFFFFFFull;
 
