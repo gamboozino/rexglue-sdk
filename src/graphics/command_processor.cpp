@@ -236,11 +236,25 @@ void CommandProcessor::WorkerThreadMain() {
         continue;
       }
     }
-    assert_true(read_ptr_index_ != write_ptr_index);
+    uint32_t read_ptr_index, generation;
+    {
+      std::lock_guard lock(ring_mutex_);
+      read_ptr_index = read_ptr_index_;
+      generation = ring_generation_;
+      write_ptr_index = write_ptr_index_.load();
+    }
+    if (write_ptr_index == 0xBAADF00D || read_ptr_index == write_ptr_index) {
+      continue;  // the ring was replaced since the check above
+    }
 
     // Execute. Note that we handle wraparound transparently.
-    read_ptr_index_ = ExecutePrimaryBuffer(read_ptr_index_, write_ptr_index);
+    uint32_t new_read_ptr_index = ExecutePrimaryBuffer(read_ptr_index, write_ptr_index);
 
+    std::lock_guard lock(ring_mutex_);
+    if (generation != ring_generation_) {
+      continue;  // the title replaced the ring meanwhile: this position is stale
+    }
+    read_ptr_index_ = new_read_ptr_index;
     // TODO(benvanik): use reader->Read_update_freq_ and only issue after moving
     //     that many indices.
     if (read_ptr_writeback_ptr_) {
@@ -312,9 +326,16 @@ bool CommandProcessor::SetupContext() {
 void CommandProcessor::ShutdownContext() {}
 
 void CommandProcessor::InitializeRingBuffer(uint32_t ptr, uint32_t size_log2) {
+  // A title can replace the ring while the worker runs (after a device
+  // reset). Until the title writes the new ring's write pointer, nothing is
+  // pending: with the old write pointer left in place the worker would run
+  // whatever memory the new ring holds from 0 up to it.
+  std::lock_guard lock(ring_mutex_);
+  write_ptr_index_ = 0xBAADF00D;
   read_ptr_index_ = 0;
   primary_buffer_ptr_ = ptr;
   primary_buffer_size_ = uint32_t(1) << (size_log2 + 3);
+  ring_generation_++;
 }
 
 void CommandProcessor::EnableReadPointerWriteBack(uint32_t ptr, uint32_t block_size_log2) {

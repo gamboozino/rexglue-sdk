@@ -254,6 +254,10 @@ class CommandProcessor {
 
   std::unique_ptr<rex::thread::Event> write_ptr_index_event_;
   std::atomic<uint32_t> write_ptr_index_;
+  // Bumped when the title replaces the ring; the worker drops a read pointer
+  // it computed for the previous ring. ring_mutex_ orders the two.
+  std::mutex ring_mutex_;
+  uint32_t ring_generation_ = 0;
 
   // Some titles submit writes beyond the emulated register file range in PM4
   // packets. Preserve these values so dependent packet logic can still observe
