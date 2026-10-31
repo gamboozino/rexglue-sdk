@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstring>
 
 #include <rex/assert.h>
@@ -158,6 +159,31 @@ void SDLAudioDriver::Shutdown() {
   }
 }
 
+// Once a second at most, when the output went wrong: frames the game hadn't
+// made in time (played as silence), the longest wait between callbacks (the
+// sound server asking late) and the deepest queue. Garbled or broken-up sound
+// in play can then be lined up with the log.
+void SDLAudioDriver::NoteCallback() {
+  using clock = std::chrono::steady_clock;
+  const auto now = clock::now();
+  if (last_callback_.time_since_epoch().count() != 0) {
+    max_gap_ = std::max(max_gap_, now - last_callback_);
+  }
+  last_callback_ = now;
+  if (now - last_report_ < std::chrono::seconds(1)) {
+    return;
+  }
+  const auto gap_ms = std::chrono::duration<double, std::milli>(max_gap_).count();
+  if (late_frames_ || gap_ms > 50.0) {
+    REXAPU_WARN("audio out: {} late frames (played as silence), longest callback gap {:.1f} ms, queue up to {}",
+                late_frames_, gap_ms, max_queued_);
+  }
+  last_report_ = now;
+  late_frames_ = 0;
+  max_queued_ = 0;
+  max_gap_ = {};
+}
+
 void SDLAudioDriver::SDLCallback(void* userdata, SDL_AudioStream* stream, int additional_amount,
                                  [[maybe_unused]] int total_amount) {
   SCOPE_profile_cpu_f("apu");
@@ -178,6 +204,7 @@ void SDLAudioDriver::SDLCallback(void* userdata, SDL_AudioStream* stream, int ad
   const StereoFold fold = GetStereoFold();
   const SurroundMix mix = GetSurroundMix();
   const float gain = GetOutputGain();
+  driver->NoteCallback();
   while (additional_amount > 0) {
     static uint32_t sdl_callback_count = 0;
     std::unique_lock<std::mutex> guard(driver->frames_mutex_);
@@ -186,6 +213,9 @@ void SDLAudioDriver::SDLCallback(void* userdata, SDL_AudioStream* stream, int ad
         REXAPU_DEBUG("SDLCallback: no frames queued (silence)");
         sdl_callback_count++;
       }
+      if (driver->started_) {
+        driver->late_frames_++;
+      }
       std::memset(data, 0, len);
       if (!SDL_PutAudioStreamData(stream, data, len)) {
         REXAPU_ERROR("SDL_PutAudioStreamData() failed while filling silence: {}", SDL_GetError());
@@ -193,6 +223,8 @@ void SDLAudioDriver::SDLCallback(void* userdata, SDL_AudioStream* stream, int ad
       }
       additional_amount -= len;
     } else {
+      driver->started_ = true;
+      driver->max_queued_ = std::max(driver->max_queued_, uint32_t(driver->frames_queued_.size()));
       auto buffer = driver->frames_queued_.front();
       driver->frames_queued_.pop();
       if (REXCVAR_GET(audio_mute)) {

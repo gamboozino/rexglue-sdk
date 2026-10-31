@@ -11,6 +11,7 @@
 
 #pragma once
 
+#include <chrono>
 #include <mutex>
 #include <queue>
 #include <stack>
@@ -35,6 +36,8 @@ class SDLAudioDriver : public AudioDriver {
   static void SDLCallback(void* userdata, SDL_AudioStream* stream, int additional_amount,
                           int total_amount);
 
+  void NoteCallback();
+
   rex::thread::Semaphore* semaphore_ = nullptr;
 
   SDL_AudioStream* sdl_stream_ = nullptr;
@@ -49,6 +52,14 @@ class SDLAudioDriver : public AudioDriver {
   std::queue<float*> frames_queued_ = {};
   std::stack<float*> frames_unused_ = {};
   std::mutex frames_mutex_ = {};
+
+  // Output health, touched only by the SDL callback thread (NoteCallback).
+  bool started_ = false;
+  uint32_t late_frames_ = 0;
+  uint32_t max_queued_ = 0;
+  std::chrono::steady_clock::time_point last_callback_ = {};
+  std::chrono::steady_clock::time_point last_report_ = {};
+  std::chrono::steady_clock::duration max_gap_ = {};
 };
 
 }  // namespace rex::audio::sdl
