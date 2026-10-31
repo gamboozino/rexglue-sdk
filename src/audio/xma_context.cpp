@@ -133,10 +133,20 @@ bool XmaContext::Work() {
   }
 
   while (remaining_subframe_blocks_in_output_buffer_ >= minimum_subframe_decode_count) {
+    const uint32_t pre_decode_offset = data.input_buffer_read_offset;
+    const uint8_t pre_remaining_subframes = current_frame_remaining_subframes_;
     Decode(&data);
     Consume(&output_rb, &data);
 
-    if (!data.IsAnyInputBufferValid() || data.error_status == 4) {
+    // A frame partly handed over is finished first: once the input runs out
+    // nothing kicks the context again to deliver the rest (Xenia Edge).
+    if ((!data.IsAnyInputBufferValid() || data.error_status == 4) &&
+        current_frame_remaining_subframes_ == 0) {
+      break;
+    }
+    // No progress and nothing pending: wait for the next buffer.
+    if (pre_remaining_subframes == 0 && data.input_buffer_read_offset == pre_decode_offset &&
+        current_frame_remaining_subframes_ == 0) {
       break;
     }
   }
@@ -359,6 +369,17 @@ kPacketInfo XmaContext::GetPacketInfo(uint8_t* packet, uint32_t frame_offset) {
 
   while (true) {
     if (stream.BitsRemaining() < kBitsPerFrameHeader) {
+      // This frame's 15-bit header runs into the next packet, so its size
+      // isn't readable yet. Count it anyway (size 0: Decode joins the two
+      // packets to read it), or the caller takes the previous frame for the
+      // packet's last and skips past this one (Xenia Edge adf56b76c).
+      if (stream.BitsRemaining() > 0) {
+        if (stream.offset_bits() == frame_offset) {
+          packet_info.current_frame_ = packet_info.frame_count_;
+          packet_info.current_frame_size_ = 0;
+        }
+        packet_info.frame_count_++;
+      }
       break;
     }
 
