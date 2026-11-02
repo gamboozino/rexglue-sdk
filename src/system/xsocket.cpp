@@ -11,6 +11,7 @@
 
 #include <cstring>
 
+#include <rex/cvar.h>
 #include <rex/kernel/xam/module.h>
 #include <rex/platform.h>
 #include <rex/system/kernel_state.h>
@@ -30,6 +31,10 @@
 #include <netinet/ip.h>
 #include <sys/socket.h>
 #endif
+
+REXCVAR_DEFINE_BOOL(net_bind_loopback, false, "Network",
+                    "Guest sockets bound to any address take the loopback address: nothing "
+                    "listens on the network (no LAN play, no firewall prompt)");
 
 namespace rex::system {
 
@@ -110,6 +115,10 @@ X_STATUS XSocket::Connect(N_XSOCKADDR* name, int name_len) {
 }
 
 X_STATUS XSocket::Bind(N_XSOCKADDR_IN* name, int name_len) {
+  if (REXCVAR_GET(net_bind_loopback) && name->sin_family == X_AF_INET &&
+      name->sin_addr == 0u) {
+    name->sin_addr = 0x7F000001u;  // 127.0.0.1
+  }
   int ret = bind(native_handle_, (sockaddr*)name, name_len);
   if (ret < 0) {
     return X_STATUS_UNSUCCESSFUL;
