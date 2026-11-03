@@ -451,13 +451,13 @@ class PosixConditionBase {
         return std::make_pair<WaitResult, size_t>(WaitResult::kTimeout, 0);
       }
 
-      if (timeout == std::chrono::milliseconds::max()) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-      } else {
-        auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - now);
-        auto sleep_time = std::min(remaining, std::chrono::milliseconds(1));
-        std::this_thread::sleep_for(sleep_time);
+      // The rest of the time, not rounded down to milliseconds: alertable waits come here in
+      // 1 ms slices, which rounded down to 0 and spun for the whole wait.
+      std::chrono::steady_clock::duration sleep_time = std::chrono::milliseconds(1);
+      if (timeout != std::chrono::milliseconds::max()) {
+        sleep_time = std::min(sleep_time, end_time - now);
       }
+      std::this_thread::sleep_for(sleep_time);
     }
   }
 
