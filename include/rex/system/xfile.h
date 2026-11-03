@@ -109,6 +109,18 @@ class XFile : public XObject {
   static object_ref<XFile> Restore(KernelState* kernel_state, stream::ByteStream* stream);
 
   bool is_synchronous() const { return is_synchronous_; }
+  // A new asynchronous request: the file object is unsignalled until it completes.
+  void ResetCompletion() { async_event_->Reset(); }
+  // An asynchronous request completed (after its status block is written): the
+  // completion ports, then the file object.
+  void Complete(uint32_t apc_context, uint32_t bytes, X_STATUS status) {
+    XIOCompletion::IONotification notify;
+    notify.apc_context = apc_context;
+    notify.num_bytes = bytes;
+    notify.status = status;
+    NotifyIOCompletionPorts(notify);
+    async_event_->Set();
+  }
 
   void SetFindPattern(const std::string_view pattern) {
     find_engine_.SetRule(pattern);

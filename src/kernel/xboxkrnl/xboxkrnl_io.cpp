@@ -18,6 +18,17 @@
 #include <rex/memory.h>
 #include <rex/hook.h>
 #include <rex/types.h>
+#include <rex/cvar.h>
+
+#include <atomic>
+#include <chrono>
+#include <thread>
+#include <condition_variable>
+#include <mutex>
+#include <deque>
+#if REX_PLATFORM_LINUX
+#include <pthread.h>
+#endif
 #include <rex/system/info/file.h>
 #include <rex/system/kernel_state.h>
 #include <rex/system/util/string_utils.h>
@@ -29,8 +40,117 @@
 #include <rex/system/xtypes.h>
 #include <rex/thread/mutex.h>
 
+
+REXCVAR_DEFINE_INT32(log_slow_reads, 0, "Kernel",
+                     "Log game file reads that take at least this many ms (0: off)");
+REXCVAR_DEFINE_BOOL(async_file_reads, true, "Kernel",
+                    "Reads the game asks to be asynchronous run on an I/O thread while it goes "
+                    "on, as on the console (off: they block the thread that asks)");
+REXCVAR_DEFINE_INT32(test_read_delay_us_per_mb, 0, "Kernel",
+                     "Test aid: slow every game file read by this many microseconds per MB "
+                     "(about 12000 is a slow SD card)");
+
 namespace rex::kernel::xboxkrnl {
 using namespace rex::system;
+
+namespace {
+
+// test_read_delay_us_per_mb: a slower disk, for measuring loads on a fast one.
+void TestReadDelay(uint32_t bytes) {
+  if (int32_t us = REXCVAR_GET(test_read_delay_us_per_mb); us > 0) {
+    std::this_thread::sleep_for(std::chrono::microseconds(int64_t(us) * bytes / (1 << 20)));
+  }
+}
+
+// Reads the game asked to be asynchronous (a file opened without
+// FILE_SYNCHRONOUS_IO_*): done in order on one guest thread of their own, then
+// completed as the console does: the status block, the event, the file's wait
+// handle and completion ports, and the APC to the thread that asked.
+class AsyncReader {
+ public:
+  struct Job {
+    object_ref<XFile> file;
+    object_ref<XEvent> event;
+    object_ref<XThread> thread;
+    uint32_t buffer, length;
+    uint64_t offset;
+    uint32_t apc_routine, apc_context, io_status_block;
+  };
+
+  // Never destroyed: its thread may still be waiting when the process exits.
+  static AsyncReader& Get() {
+    static AsyncReader* reader = new AsyncReader;
+    return *reader;
+  }
+
+  void Push(Job job) {
+    {
+      std::lock_guard lock(mutex_);
+      if (!thread_) {
+        thread_ = object_ref<XHostThread>(new XHostThread(REX_KERNEL_STATE(), 128 * 1024, 0,
+                                                          [this] { return Main(); }));
+        thread_->set_name("Async File Reads");
+        thread_->Create();
+      }
+      jobs_.push_back(std::move(job));
+    }
+    cv_.notify_one();
+  }
+
+ private:
+  int Main() {
+    while (true) {
+      Job job;
+      {
+        std::unique_lock lock(mutex_);
+        cv_.wait(lock, [&] { return !jobs_.empty(); });
+        job = std::move(jobs_.front());
+        jobs_.pop_front();
+      }
+      Run(job);
+    }
+    return 0;
+  }
+
+  void Run(Job& job) {
+    uint32_t bytes_read = 0;
+    auto start = std::chrono::steady_clock::now();
+    // Completed below, once the status block is written.
+    X_STATUS result = job.file->Read(job.buffer, job.length, job.offset, &bytes_read,
+                                     job.apc_context, /*notify_completion=*/false);
+    TestReadDelay(bytes_read);
+    if (int32_t slow_ms = REXCVAR_GET(log_slow_reads); slow_ms > 0) {
+      double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() -
+                                                            start)
+                      .count();
+      if (ms >= slow_ms) {
+        REXKRNL_INFO("slow read: {:.1f} ms, {} KB of {} on the I/O thread", ms,
+                     bytes_read / 1024, job.file->path());
+      }
+    }
+    if (job.io_status_block) {
+      auto* iosb = REX_KERNEL_MEMORY()->TranslateVirtual<X_IO_STATUS_BLOCK*>(job.io_status_block);
+      iosb->information = bytes_read;
+      // The status last: a game polling it then sees the count and the data.
+      std::atomic_thread_fence(std::memory_order_release);
+      iosb->status = result;
+    }
+    job.file->Complete(job.apc_context, bytes_read, result);
+    if (job.event) {
+      job.event->Set(0, false);
+    }
+    if (job.apc_routine && job.apc_context && result == X_STATUS_SUCCESS && job.thread) {
+      job.thread->EnqueueApc(job.apc_routine, job.apc_context, job.io_status_block, 0);
+    }
+  }
+
+  std::mutex mutex_;
+  std::condition_variable cv_;
+  std::deque<Job> jobs_;
+  object_ref<XHostThread> thread_;
+};
+
+}  // namespace
 
 struct CreateOptions {
   // https://processhacker.sourceforge.io/doc/ntioapi_8h.html
@@ -209,13 +329,60 @@ u32 NtReadFile_entry(u32 file_handle, u32 event_handle, mapped_void apc_routine_
     result = X_STATUS_INVALID_HANDLE;
   }
 
+  // A read the game asked to be asynchronous with an offset: on the I/O thread
+  // (one without an offset reads at the file position, which only a
+  // synchronous read keeps in order with the caller).
+  if (XSUCCEEDED(result) && !file->is_synchronous() && byte_offset_ptr &&
+      REXCVAR_GET(async_file_reads)) {
+    if (io_status_block) {
+      io_status_block->status = X_STATUS_PENDING;
+      io_status_block->information = 0;
+    }
+    if (ev) {
+      ev->Reset();
+    }
+    // The file object is a wait handle too, signalled when the request completes.
+    file->ResetCompletion();
+    AsyncReader::Job job;
+    job.file = file;
+    job.event = ev;
+    job.thread = retain_object(XThread::GetCurrentThread());
+    job.buffer = buffer.guest_address();
+    job.length = buffer_length;
+    job.offset = byte_offset;
+    job.apc_routine = static_cast<uint32_t>(apc_routine_ptr) & ~1u;
+    job.apc_context = apc_context.guest_address();
+    job.io_status_block = io_status_block.guest_address();
+    AsyncReader::Get().Push(std::move(job));
+    REXKRNL_IMPORT_RESULT("NtReadFile", "{:#x} (queued on the I/O thread)", X_STATUS_PENDING);
+    return X_STATUS_PENDING;
+  }
+
   if (XSUCCEEDED(result)) {
     if (true || file->is_synchronous()) {
       // Synchronous.
       uint32_t bytes_read = 0;
+      auto read_start = std::chrono::steady_clock::now();
       result = file->Read(buffer.guest_address(), buffer_length,
                           byte_offset_ptr ? static_cast<uint64_t>(*byte_offset_ptr) : -1,
                           &bytes_read, apc_context.guest_address());
+      TestReadDelay(bytes_read);
+      if (int32_t slow_ms = REXCVAR_GET(log_slow_reads); slow_ms > 0) {
+        double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() -
+                                                              read_start)
+                        .count();
+        if (ms >= slow_ms) {
+          auto* reader = XThread::GetCurrentThread();
+          char host_name[32] = "?";
+#if REX_PLATFORM_LINUX
+          pthread_getname_np(pthread_self(), host_name, sizeof(host_name));
+#endif
+          REXKRNL_INFO("slow read: {:.1f} ms, {} KB of {} on {} ({:08X}) ({})", ms,
+                       bytes_read / 1024, file->path(), host_name,
+                       reader ? reader->creation_params()->start_address : 0u,
+                       file->is_synchronous() ? "sync" : "async asked");
+        }
+      }
       if (io_status_block) {
         io_status_block->status = result;
         io_status_block->information = bytes_read;
