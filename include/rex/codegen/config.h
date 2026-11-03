@@ -11,6 +11,8 @@
 
 #pragma once
 
+#include <bitset>
+
 #include <cstdint>
 #include <filesystem>
 #include <optional>
@@ -96,6 +98,9 @@ struct RecompilerConfig {
   bool crRegistersAsLocalVariables = false;
   bool nonArgumentRegistersAsLocalVariables = false;
   bool nonVolatileRegistersAsLocalVariables = false;
+  /// Vector registers kept in the shared context even when non-volatiles are locals: ones the
+  /// game's code passes values in between functions (shared_vector_registers = [64, 65, ...]).
+  std::bitset<128> sharedVectorRegisters;
   bool generateExceptionHandlers = false;  ///< Generate SEH exception handler wrappers
 
   // === Analysis tuning (optional) ===

@@ -71,6 +71,9 @@ std::string BuilderContext::f(size_t index) {
 
 std::string BuilderContext::v(size_t index) {
   const auto& cfg = config();
+  if (index < cfg.sharedVectorRegisters.size() && cfg.sharedVectorRegisters.test(index)) {
+    return fmt::format("ctx.v{}", index);
+  }
   if ((cfg.nonArgumentRegistersAsLocalVariables && (index >= 32 && index <= 63)) ||
       (localizeNonVolatiles() && ((index >= 14 && index <= 31) || (index >= 64 && index <= 127)))) {
     locals.v[index] = true;

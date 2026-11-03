@@ -116,6 +116,15 @@ void ApplyToml(const toml::table& toml, RecompilerConfig& cfg, const std::string
             hasBool("non_volatile_as_local"), "non_volatile_as_local");
   MergeBool(cfg.generateExceptionHandlers, toml["generate_exception_handlers"].value_or(false),
             hasBool("generate_exception_handlers"), "generate_exception_handlers");
+  if (auto shared = toml["shared_vector_registers"].as_array()) {
+    for (auto& entry : *shared) {
+      if (auto index = entry.value<int64_t>(); index && *index >= 0 && *index < 128) {
+        cfg.sharedVectorRegisters.set(size_t(*index));
+      } else {
+        REXCODEGEN_ERROR("shared_vector_registers: expected register numbers 0-127");
+      }
+    }
+  }
   if (hasBool("is_dll")) {
     cfg.isDll = toml["is_dll"].value_or(false);
   }
