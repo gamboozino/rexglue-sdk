@@ -256,6 +256,9 @@ bool ReXApp::ConstructRuntime(const PathConfig& paths) {
           return true;
         return !imgui_drawer_->GetIO().WantCaptureMouse;
       });
+      input_sys->SetOverlayOpenCallback([this]() {
+        return debug_overlay_ || console_overlay_ || settings_overlay_ || achievements_overlay_;
+      });
     }
   }
 

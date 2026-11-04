@@ -162,6 +162,22 @@ void SDLInputDriver::EnumerateDevices(std::vector<DeviceInfo>& out) {
                      static_cast<int>(sizeof(guid_text)));
     info.guid = guid_text;
     info.synthetic = false;
+    switch (SDL_GetGamepadType(controller.sdl)) {
+      case SDL_GAMEPAD_TYPE_PS3:
+      case SDL_GAMEPAD_TYPE_PS4:
+      case SDL_GAMEPAD_TYPE_PS5:
+        info.kind = DeviceKind::kPlayStation;
+        break;
+      case SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_PRO:
+      case SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_JOYCON_LEFT:
+      case SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_JOYCON_RIGHT:
+      case SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_JOYCON_PAIR:
+        info.kind = DeviceKind::kNintendo;
+        break;
+      default:  // Xbox pads, and the ones that say nothing: the Xbox layout
+        info.kind = DeviceKind::kXbox;
+        break;
+    }
     out.push_back(info);
   }
 }

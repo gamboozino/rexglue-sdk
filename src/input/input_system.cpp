@@ -212,6 +212,13 @@ X_RESULT InputSystem::GetCapabilities(uint32_t user_index, uint32_t flags,
   return driver->GetDeviceCapabilities(chosen, flags, out_caps);
 }
 
+DeviceKind InputSystem::ActiveKind(uint32_t user_index) const {
+  if (user_index >= kMaxGuestUsers) {
+    return DeviceKind::kUnknown;
+  }
+  return DeviceKind(active_kind_[user_index].load(std::memory_order_relaxed));
+}
+
 X_RESULT InputSystem::GetState(uint32_t user_index, X_INPUT_STATE* out_state) {
   SCOPE_profile_cpu_f("hid");
   if (!assignment_) {
@@ -234,6 +241,11 @@ X_RESULT InputSystem::GetState(uint32_t user_index, X_INPUT_STATE* out_state) {
       continue;
     }
     active_devices_.Observe(user_index, id, state.gamepad);
+    if (active_devices_.Active(user_index) == id && user_index < kMaxGuestUsers) {
+      if (const DeviceInfo* info = DeviceInfoFor(id)) {
+        active_kind_[user_index].store(uint8_t(info->kind), std::memory_order_relaxed);
+      }
+    }
     if (!any) {
       merged = state;
       any = true;

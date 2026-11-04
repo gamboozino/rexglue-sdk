@@ -66,11 +66,12 @@ namespace {
 constexpr rex::input::DeviceId kMnkDevice = static_cast<rex::input::DeviceId>(0x4D4E4B00);
 
 // Bind values are a comma-separated list of alternatives, each optionally
-// carrying modifier prefixes: "Q,I" or "Shift+W". Modifier matching is exact,
-// so "Up" stays silent while Shift is held and "Shift+Up" stays silent without
-// it. That is what lets the D-pad share the arrow keys. A consequence is
-// that binding a bare modifier name ("Shift") can never fire, since holding it
-// makes the live mask non-zero while the bind wants zero.
+// carrying modifier prefixes: "Q,I" or "Shift+W". A bind with modifiers wants
+// exactly those ("Shift+Up" is silent without Shift, or with Ctrl too); one
+// without works whatever is held, so a bare modifier ("Shift") can be bound
+// and holding one doesn't silence the rest. (So "Up" also fires with Shift
+// held: the default D-pad on Shift+arrows and right stick on the arrows both
+// move then; a game that binds a modifier gives the arrows one meaning.)
 constexpr uint8_t kModShift = 1u << 0;
 constexpr uint8_t kModCtrl = 1u << 1;
 constexpr uint8_t kModAlt = 1u << 2;
@@ -123,8 +124,11 @@ std::string_view TrimSpaces(std::string_view s) {
 }
 
 bool TokenPressed(const bool (&key_down)[256], std::string_view token, uint8_t live_mods) {
+  // A bind with modifiers wants exactly those; one without works whatever is
+  // held, so a bare modifier ("Shift") can be bound and holding it doesn't
+  // silence the other keys.
   uint8_t want = TakeModifiers(token);
-  if (want != live_mods) {
+  if (want && want != live_mods) {
     return false;
   }
   rex::ui::VirtualKey vk = rex::ui::ParseVirtualKey(token);
@@ -228,6 +232,7 @@ void MnkInputDriver::EnumerateDevices(std::vector<DeviceInfo>& out) {
   info.id = kMnkDevice;
   info.name = "Keyboard and Mouse";
   info.synthetic = true;
+  info.kind = DeviceKind::kKeyboard;
   out.push_back(info);
 }
 

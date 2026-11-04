@@ -145,6 +145,7 @@ void XinputInputDriver::EnumerateDevices(std::vector<DeviceInfo>& out) {
     DeviceInfo info;
     info.id = DeviceForSlot(slot);
     info.name = "XInput Controller";
+    info.kind = DeviceKind::kXbox;
     info.synthetic = false;
     out.push_back(info);
   }

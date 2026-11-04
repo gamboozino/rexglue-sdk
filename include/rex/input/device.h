@@ -22,12 +22,17 @@ constexpr uint32_t kMaxGuestUsers = 4;
 /// device took the freed slot.
 enum class DeviceId : uint64_t { kInvalid = 0 };
 
+/// What a device is, for button prompts: a pad by its maker's layout, or the
+/// keyboard and mouse.
+enum class DeviceKind : uint8_t { kUnknown, kXbox, kPlayStation, kNintendo, kKeyboard };
+
 struct DeviceInfo {
   DeviceId id = DeviceId::kInvalid;
   uint32_t ordinal = 0;  // connection order, assigned by InputSystem
   std::string name;
   std::string guid;
   bool synthetic = false;  // keyboard/mouse emulation or the NOP stand-in
+  DeviceKind kind = DeviceKind::kUnknown;
 };
 
 }  // namespace rex::input

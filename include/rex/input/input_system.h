@@ -10,8 +10,12 @@
  * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
  */
 
+#include <functional>
 #include <memory>
 #include <vector>
+
+#include <array>
+#include <atomic>
 
 #include <rex/input/device_assignment.h>
 #include <rex/input/input.h>
@@ -38,6 +42,9 @@ class InputSystem : public system::IInputSystem {
   void AddDriver(std::unique_ptr<InputDriver> driver);
   void AttachWindow(rex::ui::Window* window);
   void SetActiveCallback(std::function<bool()> callback);
+  // Whether one of the app's overlays (debug, console, settings) is open.
+  void SetOverlayOpenCallback(std::function<bool()> callback) { overlay_open_ = std::move(callback); }
+  bool IsOverlayOpen() const { return overlay_open_ && overlay_open_(); }
 
   /// Replaces any previous assignment. Call before the guest starts polling.
   void SetDeviceAssignment(std::unique_ptr<DeviceAssignment> assignment);
@@ -47,7 +54,12 @@ class InputSystem : public system::IInputSystem {
   X_RESULT SetState(uint32_t user_index, X_INPUT_VIBRATION* vibration);
   X_RESULT GetKeystroke(uint32_t user_index, uint32_t flags, X_INPUT_KEYSTROKE* out_keystroke);
 
+  /// What the device last used by the user is (any thread; kUnknown until a
+  /// device has been used).
+  DeviceKind ActiveKind(uint32_t user_index) const;
+
  private:
+  std::function<bool()> overlay_open_;
   /// Re-enumerates every driver and notifies the assignment when the set
   /// changed.
   void RefreshDevices();
@@ -60,6 +72,7 @@ class InputSystem : public system::IInputSystem {
 
   std::unique_ptr<DeviceAssignment> assignment_;
   ActiveDeviceTracker active_devices_;
+  std::array<std::atomic<uint8_t>, kMaxGuestUsers> active_kind_{};
 
   // Ordered by ordinal. Ordinals are never recycled, so unplugging pad one
   // does not renumber pad two.
