@@ -9,7 +9,9 @@
  * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
  */
 
+#include <algorithm>
 #include <array>
+#include <cctype>
 #include <cstring>
 #include <queue>
 #include <string>
@@ -59,6 +61,20 @@ ContentPackage::~ContentPackage() {
   fs->UnregisterDevice(device_path_);
 }
 
+namespace {
+bool IsStfsHeader(const uint8_t* bytes) {
+  return std::memcmp(bytes, "CON ", 4) == 0 || std::memcmp(bytes, "LIVE", 4) == 0 ||
+         std::memcmp(bytes, "PIRS", 4) == 0;
+}
+
+bool SameNameIgnoringCase(std::string_view a, std::string_view b) {
+  return a.size() == b.size() && std::equal(a.begin(), a.end(), b.begin(), [](char x, char y) {
+           return std::tolower(static_cast<unsigned char>(x)) ==
+                  std::tolower(static_cast<unsigned char>(y));
+         });
+}
+}  // namespace
+
 void ContentPackage::LoadPackageLicenseMask(const std::filesystem::path header_path) {
   if (!std::filesystem::exists(header_path)) {
     return;
@@ -75,6 +91,11 @@ void ContentPackage::LoadPackageLicenseMask(const std::filesystem::path header_p
     return;
   }
 
+  uint8_t magic[4] = {};
+  if (fread(magic, 1, sizeof(magic), file) != sizeof(magic) || IsStfsHeader(magic)) {
+    fclose(file);
+    return;
+  }
   fseek(file, sizeof(XCONTENT_AGGREGATE_DATA), SEEK_SET);
   fread(&license_, 1, sizeof(license_), file);
   fclose(file);
@@ -155,9 +176,12 @@ std::vector<XCONTENT_AGGREGATE_DATA> ContentManager::ListContent(uint32_t device
       continue;
     }
 
+    // ReadContentHeaderFile's failures are Win32 codes (X_ERROR_FILE_NOT_FOUND
+    // is 2), which XSUCCEEDED counts as success: compare with success itself,
+    // or a folder without a usable header is listed as an empty record.
     XCONTENT_AGGREGATE_DATA content_data;
-    if (XSUCCEEDED(ReadContentHeaderFile(rex::path_to_utf8(file_info.name), xuid, title_id,
-                                         content_type, content_data))) {
+    if (ReadContentHeaderFile(rex::path_to_utf8(file_info.name), xuid, title_id, content_type,
+                              content_data) == X_ERROR_SUCCESS) {
       result.emplace_back(std::move(content_data));
     } else {
       content_data.device_id = device_id;
@@ -251,7 +275,19 @@ X_RESULT ContentManager::ReadContentHeaderFile(const std::string_view file_name,
     return X_ERROR_FILE_NOT_FOUND;
   }
 
+  // A header from a console or another emulator (an STFS package header,
+  // "CON "/"LIVE"/"PIRS", 40 KB) isn't this layout: read as one, it names a
+  // package that doesn't exist, and the title makes a new one over the
+  // player's. Report it missing instead, so the caller uses the folder.
+  if (IsStfsHeader(buffer.data())) {
+    return X_ERROR_FILE_NOT_FOUND;
+  }
   std::memcpy(&data, buffer.data(), buffer.size());
+  if (!SameNameIgnoringCase(data.file_name(), file_name)) {
+    return X_ERROR_FILE_NOT_FOUND;
+  }
+  // The folder's spelling: paths are case-sensitive on Linux.
+  data.set_file_name(file_name);
   return X_ERROR_SUCCESS;
 }
 
