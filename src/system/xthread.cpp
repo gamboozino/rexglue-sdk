@@ -841,14 +841,19 @@ void XThread::SetPriority(int32_t increment) {
   auto kthread = guest_object<X_KTHREAD>();
   kthread->priority = static_cast<uint8_t>(std::clamp(increment, 0, 31));
 
+  // The increment is a priority boost of -16..16 (15 and 16: the real-time
+  // range a title asks for its audio threads; 1..2 a little above normal).
+  // The old thresholds (over 0x11 / 0x22) left every such request at normal,
+  // so an audio thread got no more CPU than the threads it feeds on a busy
+  // machine.
   int32_t target_priority = 0;
-  if (increment > 0x22) {
+  if (increment >= 15) {
     target_priority = rex::thread::ThreadPriority::kHighest;
-  } else if (increment > 0x11) {
+  } else if (increment > 0) {
     target_priority = rex::thread::ThreadPriority::kAboveNormal;
-  } else if (increment < -0x22) {
+  } else if (increment <= -15) {
     target_priority = rex::thread::ThreadPriority::kLowest;
-  } else if (increment < -0x11) {
+  } else if (increment < 0) {
     target_priority = rex::thread::ThreadPriority::kBelowNormal;
   } else {
     target_priority = rex::thread::ThreadPriority::kNormal;
