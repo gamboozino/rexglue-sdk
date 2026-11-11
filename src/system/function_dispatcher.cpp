@@ -34,7 +34,48 @@ FunctionDispatcher* GetBoundFunctionDispatcher() {
 
 }  // namespace
 
+// Where the bad call came from: the caller's return address, then up the
+// stack's back chain (each function saves its LR 8 bytes below its caller's
+// frame), and the argument registers, so a crash report names the code.
+std::string GuestCallChain(PPCContext& ctx) {
+  std::string chain = fmt::format("{:08X}", uint32_t(ctx.lr));
+  Runtime* runtime = Runtime::instance();
+  memory::Memory* mem = runtime ? runtime->memory() : nullptr;
+  if (!mem) {
+    return chain;
+  }
+  // Only within the stack's own heap, word-aligned: the walk may run in the
+  // access violation handler, where reading a bad address ends the process.
+  const memory::BaseHeap* stackHeap = mem->LookupHeap(ctx.r1.u32);
+  if (!stackHeap || (stackHeap->heap_type() != memory::HeapType::kGuestVirtual &&
+                     stackHeap->heap_type() != memory::HeapType::kGuestXex)) {
+    return chain;
+  }
+  auto readable = [&](uint32_t address) {
+    uint32_t protect = 0;
+    auto* heap = mem->LookupHeap(address);
+    return heap == stackHeap && !(address & 3) && heap->QueryProtect(address, &protect) &&
+           (protect & memory::kMemoryProtectRead);
+  };
+  auto load32 = [&](uint32_t address) {
+    return rex::memory::load_and_swap<uint32_t>(mem->TranslateVirtual(address));
+  };
+  uint32_t sp = ctx.r1.u32;
+  for (int depth = 0; depth < 16 && readable(sp); depth++) {
+    uint32_t next = load32(sp);
+    if (!next || (next & 7) || next <= sp || next - sp > 0x100000 || !readable(next - 8)) {
+      break;
+    }
+    chain += fmt::format(" {:08X}", load32(next - 8));
+    sp = next;
+  }
+  return chain;
+}
+
 static void InvalidFunctionTrap(PPCContext& ctx, uint8_t* /*base*/) {
+  REXCPU_ERROR("Bad call from {} (r3 {:08X} r4 {:08X} r5 {:08X} r11 {:08X} r12 {:08X})",
+               GuestCallChain(ctx), ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r11.u32,
+               ctx.r12.u32);
   REX_FATAL("Call to invalid or unregistered function at guest address 0x{:08X}",
             ctx.last_indirect_target);
 }

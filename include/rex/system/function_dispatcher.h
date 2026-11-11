@@ -156,4 +156,8 @@ class FunctionDispatcher : public IModuleRegistrar {
   mutable std::recursive_mutex dispatch_mutex_;
 };
 
+// The guest's return addresses, innermost first (the last call's, then up the
+// stack's back chain), for crash logs.
+std::string GuestCallChain(PPCContext& ctx);
+
 }  // namespace rex::runtime
