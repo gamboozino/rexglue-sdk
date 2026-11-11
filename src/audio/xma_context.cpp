@@ -438,7 +438,14 @@ void XmaContext::StoreContextMerged(const XMA_CONTEXT_DATA& data,
   fresh.input_buffer_read_offset = data.input_buffer_read_offset;
   fresh.error_status = data.error_status;
   fresh.current_buffer = data.current_buffer;
-  fresh.output_buffer_read_offset = data.output_buffer_read_offset;
+  // The game advances the output read offset as it plays the decoded sound;
+  // a decode pass never moves it. Written back only if this pass changed it:
+  // stored as read at the pass's start, it undid what the game consumed
+  // meanwhile and the game played that audio again (choppy sound on slow
+  // CPUs, where a pass takes longer).
+  if (data.output_buffer_read_offset != initial_data.output_buffer_read_offset) {
+    fresh.output_buffer_read_offset = data.output_buffer_read_offset;
+  }
 
   fresh.Store(context_ptr);
 }
