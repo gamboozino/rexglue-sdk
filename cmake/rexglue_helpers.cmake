@@ -46,10 +46,10 @@ endfunction()
 #==========================================================
 function(rexglue_apply_target_settings target_name)
     if(UNIX AND NOT APPLE)
-        # Large executable support
+        # (the small code model, as the SDK: calls between the recompiled
+        # functions direct)
         if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
-            target_link_options(${target_name} PRIVATE -Wl,--no-relax)
-            target_compile_options(${target_name} PRIVATE -mcmodel=large)
+            target_compile_options(${target_name} PRIVATE -mcmodel=small)
         elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|ARM64")
             target_compile_options(${target_name} PRIVATE -march=armv8-a)
         endif()

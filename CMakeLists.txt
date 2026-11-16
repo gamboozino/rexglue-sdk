@@ -117,10 +117,11 @@ endfunction()
 if(NOT WIN32)
     # Use appropriate code model based on architecture
     if(CMAKE_SYSTEM_PROCESSOR MATCHES "AMD64|x86_64" AND NOT APPLE)
-        # Large code model on Linux x86_64 for linking with very large recompiled executables (35MB+).
-        # macOS uses small: the ld64 linker on macOS 15+ rejects text relocations produced
-        # by -mcmodel=large, and macOS maps binaries in the low address space so ±2GB is sufficient.
-        add_compile_options(-mcmodel=large)
+        # Small code model: an executable's code and data within 2 GB of each
+        # other (a recompiled game's code is around 100 MB). The large model
+        # made every call between functions an indirect one through a
+        # register loaded with the full address.
+        add_compile_options(-mcmodel=small)
     else()
         add_compile_options(-mcmodel=small)
     endif()
