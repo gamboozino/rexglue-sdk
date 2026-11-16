@@ -15,6 +15,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <unordered_map>
 #include <unordered_set>
 
 #include <fmt/format.h>
@@ -353,7 +354,8 @@ void emit_print(std::string& out, fmt::format_string<Args...> fmt, Args&&... arg
 // gets REX_SPIN_WAIT (the back-off of rex/ppc/intrinsics.h). Loops with the
 // guest's own spin hint (db16cyc: or 31,31,31) have it already. (After
 // IzunaRecomp v0.2.2.1.)
-bool IsSpinLoopHead(const BinaryView& binary, uint32_t head) {
+// *backEdge: the branch that goes round again.
+bool IsSpinLoopHead(const BinaryView& binary, uint32_t head, uint32_t* backEdge) {
   constexpr int kMaxInstructions = 12;
   uint32_t written = 0, bases = 0;
   int loads = 0;
@@ -430,6 +432,7 @@ bool IsSpinLoopHead(const BinaryView& binary, uint32_t head) {
         const int32_t bd = int32_t(int16_t(w & 0xFFFC));
         const uint32_t target = (w & 2) ? uint32_t(bd) : address + uint32_t(bd);
         if (target == head) {
+          *backEdge = address;
           return loads > 0 && !(bases & written);
         }
         break;
@@ -443,6 +446,7 @@ bool IsSpinLoopHead(const BinaryView& binary, uint32_t head) {
           li -= 0x04000000;
         }
         const uint32_t target = (w & 2) ? uint32_t(li) : address + uint32_t(li);
+        *backEdge = address;
         return target == head && loads > 0 && !(bases & written);
       }
       default:
@@ -604,10 +608,11 @@ std::string FunctionNode::emitCpp(const EmitContext& ctx) const {
 
   ppc_insn insn;
   std::unordered_set<size_t> emittedLabels;
-  // Busy-wait loop heads (IsSpinLoopHead): the back-off goes on the branches
-  // back to them, so it runs when the wait goes round again, not each time
-  // the loop is entered (a state machine's dispatch, a handoff already done).
-  std::unordered_set<uint32_t> spinHeads;
+  // Busy-wait loops (IsSpinLoopHead), by their branch back to the head: the
+  // back-off goes on that branch, so it runs when the wait goes round again,
+  // not each time the loop is entered (a state machine's dispatch, a handoff
+  // already done), nor on another branch to the same head.
+  std::unordered_map<uint32_t, uint32_t> spinBackEdges;
 
   for (const auto& block : blocks()) {
     auto blockBase = block.base;
@@ -628,8 +633,8 @@ std::string FunctionNode::emitCpp(const EmitContext& ctx) const {
         // memory again on every pass, so a wait still sees another thread's
         // write.
         emit_println(body, "\tREX_LABEL_BARRIER();");
-        if (IsSpinLoopHead(ctx.binary, blockBase)) {
-          spinHeads.insert(blockBase);
+        if (uint32_t backEdge = 0; IsSpinLoopHead(ctx.binary, blockBase, &backEdge)) {
+          spinBackEdges.emplace(backEdge, blockBase);
         }
         csrState = CSRState::Unknown;
       }
@@ -713,13 +718,11 @@ std::string FunctionNode::emitCpp(const EmitContext& ctx) const {
           allRecompiled = false;
         }
 
-        for (uint32_t head : spinHeads) {
-          if (blockBase > head && blockBase < head + 48) {
-            const std::string jump = fmt::format("goto loc_{:X};", head);
-            const size_t at = body.find(jump, emittedFrom);
-            if (at != std::string::npos) {
-              body.replace(at, jump.size(), "{ REX_SPIN_WAIT(); " + jump + " }");
-            }
+        if (auto spin = spinBackEdges.find(blockBase); spin != spinBackEdges.end()) {
+          const std::string jump = fmt::format("goto loc_{:X};", spin->second);
+          const size_t at = body.find(jump, emittedFrom);
+          if (at != std::string::npos) {
+            body.replace(at, jump.size(), "{ REX_SPIN_WAIT(); " + jump + " }");
           }
         }
 
