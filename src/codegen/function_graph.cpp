@@ -344,6 +344,114 @@ void emit_print(std::string& out, fmt::format_string<Args...> fmt, Args&&... arg
   fmt::vformat_to(std::back_inserter(out), fmt.get(), fmt::make_format_args(args...));
 }
 
+// Whether the loop starting at `head` is a busy-wait: a short run of
+// instructions that only read memory, compare and branch (out, or back to
+// `head`) until another thread changes what it reads. Nothing in it is
+// stored or called, and no register a load takes its address from is written
+// in it, so every pass reads the same words. On the Xbox 360 such a wait had a
+// hardware thread to itself; here it would hold a whole core, so its label
+// gets REX_SPIN_WAIT (the back-off of rex/ppc/intrinsics.h). Loops with the
+// guest's own spin hint (db16cyc: or 31,31,31) have it already. (After
+// IzunaRecomp v0.2.2.1.)
+bool IsSpinLoopHead(const BinaryView& binary, uint32_t head) {
+  constexpr int kMaxInstructions = 12;
+  uint32_t written = 0, bases = 0;
+  int loads = 0;
+  for (int i = 0; i < kMaxInstructions; ++i) {
+    const uint32_t address = head + uint32_t(i) * 4;
+    const uint8_t* p = binary.translate(address);
+    if (!p) {
+      return false;
+    }
+    const uint32_t w = load_and_swap<uint32_t>(p);
+    const uint32_t op = w >> 26, rt = (w >> 21) & 31, ra = (w >> 16) & 31, rb = (w >> 11) & 31;
+    auto load = [&](bool indexed) {
+      written |= 1u << rt;
+      if (ra) {
+        bases |= 1u << ra;
+      }
+      if (indexed) {
+        bases |= 1u << rb;
+      }
+      ++loads;
+    };
+    switch (op) {
+      case 32: case 34: case 40: case 42:  // lwz lbz lhz lha
+        load(false);
+        break;
+      case 58:  // ld, lwa (not ldu)
+        if ((w & 3) == 1) {
+          return false;
+        }
+        load(false);
+        break;
+      case 10: case 11:  // cmpli cmpi
+        break;
+      case 21: case 28:  // rlwinm, andi.: rS -> rA
+        written |= 1u << ra;
+        break;
+      case 24:  // ori: only the nop
+        if (w != 0x60000000u) {
+          return false;
+        }
+        break;
+      case 31: {
+        const uint32_t xo = (w >> 1) & 0x3FF;
+        switch (xo) {
+          case 23: case 87: case 279: case 21:  // lwzx lbzx lhzx ldx
+            load(true);
+            break;
+          case 0: case 32:  // cmp cmpl
+            break;
+          case 444:  // or: mr rA,rS only (db16cyc, or 31,31,31, has its own back-off)
+            if (rt == 31 && ra == 31 && rb == 31) {
+              return false;
+            }
+            if (rt != rb) {
+              return false;
+            }
+            written |= 1u << ra;
+            break;
+          case 28:  // and
+            written |= 1u << ra;
+            break;
+          default:
+            return false;
+        }
+        break;
+      }
+      case 16: {  // bc: out of the loop, or back to its head
+        if (w & 1) {
+          return false;  // (a call)
+        }
+        if (!(rt & 0x04)) {
+          return false;  // (counts CTR: a timed loop, not a wait)
+        }
+        const int32_t bd = int32_t(int16_t(w & 0xFFFC));
+        const uint32_t target = (w & 2) ? uint32_t(bd) : address + uint32_t(bd);
+        if (target == head) {
+          return loads > 0 && !(bases & written);
+        }
+        break;
+      }
+      case 18: {  // b: only back to the head
+        if (w & 1) {
+          return false;
+        }
+        int32_t li = int32_t(w & 0x03FFFFFC);
+        if (li & 0x02000000) {
+          li -= 0x04000000;
+        }
+        const uint32_t target = (w & 2) ? uint32_t(li) : address + uint32_t(li);
+        return target == head && loads > 0 && !(bases & written);
+      }
+      default:
+        return false;
+    }
+  }
+  return false;
+}
+
 }  // namespace
 
 std::string FunctionNode::emitCpp(const EmitContext& ctx) const {
@@ -496,6 +604,10 @@ std::string FunctionNode::emitCpp(const EmitContext& ctx) const {
 
   ppc_insn insn;
   std::unordered_set<size_t> emittedLabels;
+  // Busy-wait loop heads (IsSpinLoopHead): the back-off goes on the branches
+  // back to them, so it runs when the wait goes round again, not each time
+  // the loop is entered (a state machine's dispatch, a handoff already done).
+  std::unordered_set<uint32_t> spinHeads;
 
   for (const auto& block : blocks()) {
     auto blockBase = block.base;
@@ -511,6 +623,14 @@ std::string FunctionNode::emitCpp(const EmitContext& ctx) const {
       // Only emit each label once
       if (labels.find(blockBase) != labels.end() && emittedLabels.insert(blockBase).second) {
         emit_println(body, "loc_{:X}:", blockBase);
+        // Guest accesses are plain ones (pch_h.inja): a compiler barrier at
+        // every label makes each loop, which always goes back to one, read
+        // memory again on every pass, so a wait still sees another thread's
+        // write.
+        emit_println(body, "\tREX_LABEL_BARRIER();");
+        if (IsSpinLoopHead(ctx.binary, blockBase)) {
+          spinHeads.insert(blockBase);
+        }
         csrState = CSRState::Unknown;
       }
 
@@ -587,9 +707,20 @@ std::string FunctionNode::emitCpp(const EmitContext& ctx) const {
           builderCtx.emit_mid_asm_hook();
         }
 
+        const size_t emittedFrom = body.size();
         if (!DispatchInstruction(id, builderCtx)) {
           REXCODEGEN_WARN("Unrecognized instruction at 0x{:X}: {}", blockBase, insn.opcode->name);
           allRecompiled = false;
+        }
+
+        for (uint32_t head : spinHeads) {
+          if (blockBase > head && blockBase < head + 48) {
+            const std::string jump = fmt::format("goto loc_{:X};", head);
+            const size_t at = body.find(jump, emittedFrom);
+            if (at != std::string::npos) {
+              body.replace(at, jump.size(), "{ REX_SPIN_WAIT(); " + jump + " }");
+            }
+          }
         }
 
         // Check for mid-asm hook AFTER instruction

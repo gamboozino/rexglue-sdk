@@ -30,27 +30,29 @@ bool build_attn(BuilderContext& ctx) {
   return true;
 }
 
+// sync, lwsync, eieio: x86's ordering already covers what the game relies on
+// (these were no-ops), but the guest's loads and stores are plain accesses the
+// compiler may move (pch_h.inja), so each is a compiler barrier: nothing moved
+// across it, as with the volatile accesses before.
 bool build_sync(BuilderContext& ctx) {
-  // Memory barrier, x86 has strong ordering so this is a no-op
-  (void)ctx;
+  ctx.println("\tstd::atomic_signal_fence(std::memory_order_seq_cst);");
   return true;
 }
 
 bool build_lwsync(BuilderContext& ctx) {
-  // Lightweight memory barrier, x86 has strong ordering so this is a no-op
-  (void)ctx;
+  ctx.println("\tstd::atomic_signal_fence(std::memory_order_seq_cst);");
   return true;
 }
 
 bool build_eieio(BuilderContext& ctx) {
-  // Enforce in-order execution of I/O, x86 has strong ordering so this is a no-op
-  (void)ctx;
+  ctx.println("\tstd::atomic_signal_fence(std::memory_order_seq_cst);");
   return true;
 }
 
 bool build_db16cyc(BuilderContext& ctx) {
-  // Xenon-specific 16-cycle delay hint, no effect in recompiled code
-  (void)ctx;
+  // Xenon's spin-wait hint: a pause, then a yield (rex/ppc/intrinsics.h),
+  // instead of nothing, which left the game's spin loops holding a core.
+  ctx.println("\tppc_db16cyc();");
   return true;
 }
 

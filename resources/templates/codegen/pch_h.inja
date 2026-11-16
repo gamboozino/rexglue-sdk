@@ -132,17 +132,54 @@ extern PPCFuncMapping PPCFuncMappings[];
 
 #define REX_RAW_ADDR(x) (base + (u32)(x) + REX_PHYS_HOST_OFFSET(x))
 
-#define REX_LOAD_U8(x) (*(volatile u8*)(base + (u32)(x) + REX_PHYS_HOST_OFFSET(x)))
-#define REX_LOAD_U16(x) __builtin_bswap16(*(volatile u16*)(base + (u32)(x) + REX_PHYS_HOST_OFFSET(x)))
-#define REX_LOAD_U32(x) __builtin_bswap32(*(volatile u32*)(base + (u32)(x) + REX_PHYS_HOST_OFFSET(x)))
-#define REX_LOAD_U64(x) __builtin_bswap64(*(volatile u64*)(base + (u32)(x) + REX_PHYS_HOST_OFFSET(x)))
+// Guest memory as ordinary accesses the compiler may optimise (keep in a
+// register, forward a store to the next load, drop a repeated one); memcpy
+// keeps them free of alignment and aliasing assumptions. What keeps one
+// thread's wait seeing another's write is REX_LABEL_BARRIER at every label:
+// each loop goes back to one, and after it no guest load is reused from
+// before. -DREX_GUEST_ACCESSES_VOLATILE makes them volatile again (no codegen
+// needed). (The plain accesses and the barrier after IzunaRecomp v0.2.2.1.)
+#ifdef REX_GUEST_ACCESSES_VOLATILE
+#define REX_GUEST_PTR(x) ((volatile u8*)(base + (u32)(x) + REX_PHYS_HOST_OFFSET(x)))
+static inline u8 rex_guest_load_u8(volatile u8* p) { return *p; }
+static inline u16 rex_guest_load_u16(volatile u8* p) { return __builtin_bswap16(*(volatile u16*)p); }
+static inline u32 rex_guest_load_u32(volatile u8* p) { return __builtin_bswap32(*(volatile u32*)p); }
+static inline u64 rex_guest_load_u64(volatile u8* p) { return __builtin_bswap64(*(volatile u64*)p); }
+static inline void rex_guest_store_u8(volatile u8* p, u8 v) { *p = v; }
+static inline void rex_guest_store_u16(volatile u8* p, u16 v) { *(volatile u16*)p = __builtin_bswap16(v); }
+static inline void rex_guest_store_u32(volatile u8* p, u32 v) { *(volatile u32*)p = __builtin_bswap32(v); }
+static inline void rex_guest_store_u64(volatile u8* p, u64 v) { *(volatile u64*)p = __builtin_bswap64(v); }
+#define REX_LABEL_BARRIER() ((void)0)
+#else
+#define REX_GUEST_PTR(x) (base + (u32)(x) + REX_PHYS_HOST_OFFSET(x))
+static inline u8 rex_guest_load_u8(const u8* p) { return *p; }
+static inline u16 rex_guest_load_u16(const u8* p) { u16 v; __builtin_memcpy(&v, p, 2); return __builtin_bswap16(v); }
+static inline u32 rex_guest_load_u32(const u8* p) { u32 v; __builtin_memcpy(&v, p, 4); return __builtin_bswap32(v); }
+static inline u64 rex_guest_load_u64(const u8* p) { u64 v; __builtin_memcpy(&v, p, 8); return __builtin_bswap64(v); }
+static inline void rex_guest_store_u8(u8* p, u8 v) { *p = v; }
+static inline void rex_guest_store_u16(u8* p, u16 v) { v = __builtin_bswap16(v); __builtin_memcpy(p, &v, 2); }
+static inline void rex_guest_store_u32(u8* p, u32 v) { v = __builtin_bswap32(v); __builtin_memcpy(p, &v, 4); }
+static inline void rex_guest_store_u64(u8* p, u64 v) { v = __builtin_bswap64(v); __builtin_memcpy(p, &v, 8); }
+// (Not a memory clobber, which would also send the guest registers kept in
+// ctx out to memory and back on every pass of every loop: hiding `base` is
+// enough, no guest address after the label is known to equal one before it.)
+#define REX_LABEL_BARRIER() __asm__ __volatile__("" : "+r"(base))
+#endif
+// The head of a busy-wait loop (function_graph.cpp, IsSpinLoopHead): a
+// pause, then a yield, as the guest's own spin hint.
+#define REX_SPIN_WAIT() ppc_db16cyc()
+
+#define REX_LOAD_U8(x) rex_guest_load_u8(REX_GUEST_PTR(x))
+#define REX_LOAD_U16(x) rex_guest_load_u16(REX_GUEST_PTR(x))
+#define REX_LOAD_U32(x) rex_guest_load_u32(REX_GUEST_PTR(x))
+#define REX_LOAD_U64(x) rex_guest_load_u64(REX_GUEST_PTR(x))
 #define REX_LOAD_STRING(x, len) \
   std::string_view(reinterpret_cast<const char*>(base + (u32)(x) + REX_PHYS_HOST_OFFSET(x)), (len))
 
-#define REX_STORE_U8(x, y)  (*(volatile u8*)(base + (u32)(x) + REX_PHYS_HOST_OFFSET(x)) = (y))
-#define REX_STORE_U16(x, y) (*(volatile u16*)(base + (u32)(x) + REX_PHYS_HOST_OFFSET(x)) = __builtin_bswap16(y))
-#define REX_STORE_U32(x, y) (*(volatile u32*)(base + (u32)(x) + REX_PHYS_HOST_OFFSET(x)) = __builtin_bswap32(y))
-#define REX_STORE_U64(x, y) (*(volatile u64*)(base + (u32)(x) + REX_PHYS_HOST_OFFSET(x)) = __builtin_bswap64(y))
+#define REX_STORE_U8(x, y) rex_guest_store_u8(REX_GUEST_PTR(x), (y))
+#define REX_STORE_U16(x, y) rex_guest_store_u16(REX_GUEST_PTR(x), (y))
+#define REX_STORE_U32(x, y) rex_guest_store_u32(REX_GUEST_PTR(x), (y))
+#define REX_STORE_U64(x, y) rex_guest_store_u64(REX_GUEST_PTR(x), (y))
 
 #define REX_MEMORY_SIZE 0x100000000ull
 

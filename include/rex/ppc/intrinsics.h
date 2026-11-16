@@ -393,6 +393,17 @@ inline simde__m128i simde_mm_sllv_epi8(simde__m128i a, simde__m128i count) {
   return simde_mm_packus_epi16(r_lo, r_hi);
 }
 
+// db16cyc: the guest's spin hint ("waiting, low priority"), and the head of
+// each loop the recompiler finds only reading memory until another thread
+// changes it (REX_SPIN_WAIT, function_graph.cpp). On the Xbox 360 such a wait
+// had a hardware thread to itself; here a pause, then after 50 us of the same
+// wait a yield each time, so it can't hold a core the thread it waits for
+// needs. No sleep: one wakes too late for the game's handoffs between its
+// threads, many a frame. Out of line (src/system/spin_backoff.cpp). (After
+// IzunaRecomp v0.2.2.1.)
+void SpinBackoff() noexcept;
+inline void db16cyc() { SpinBackoff(); }
+
 }  // namespace rex::ppc
 
 //=============================================================================
@@ -400,6 +411,7 @@ inline simde__m128i simde_mm_sllv_epi8(simde__m128i a, simde__m128i count) {
 //=============================================================================
 // Vector mask tables accessible from global scope for generated code
 using rex::ppc::VectorMaskL;
+#define ppc_db16cyc() ::rex::ppc::db16cyc()
 using rex::ppc::VectorMaskR;
 using rex::ppc::VectorShiftTableL;
 using rex::ppc::VectorShiftTableR;
