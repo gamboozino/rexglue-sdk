@@ -62,6 +62,8 @@ class BinaryView {
 
   // Section access
   const uint8_t* translate(uint32_t addr) const;
+  /// Overwrites bytes of a loaded section (image_patches); false if they aren't all in one.
+  bool patch(uint32_t addr, const uint8_t* data, size_t size);
   bool isExecutable(uint32_t addr) const;
   const SectionView* findSection(uint32_t addr) const;
   const SectionView* findSectionByName(std::string_view name) const;

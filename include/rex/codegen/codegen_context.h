@@ -156,6 +156,9 @@ class CodegenContext {
 
   const std::filesystem::path& configDir() const { return configDir_; }
   void setConfigDir(const std::filesystem::path& dir) { configDir_ = dir; }
+  /// Lays the config's image_patches over the binary (relative to configDir()); an error names
+  /// the file and record that couldn't be applied.
+  Result<void> applyImagePatches();
 
   void setDllModule(bool is_dll) { is_dll_module_ = is_dll; }
   bool isDllModule() const { return is_dll_module_; }

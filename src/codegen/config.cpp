@@ -125,6 +125,15 @@ void ApplyToml(const toml::table& toml, RecompilerConfig& cfg, const std::string
       }
     }
   }
+  if (auto patches = toml["image_patches"].as_array()) {
+    for (auto& entry : *patches) {
+      if (auto path = entry.value<std::string>()) {
+        cfg.imagePatches.push_back(*path);
+      } else {
+        REXCODEGEN_ERROR("image_patches: expected file paths");
+      }
+    }
+  }
   if (hasBool("is_dll")) {
     cfg.isDll = toml["is_dll"].value_or(false);
   }

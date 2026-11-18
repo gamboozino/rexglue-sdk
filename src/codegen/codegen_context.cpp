@@ -9,6 +9,9 @@
  */
 
 #include "decoded_binary.h"
+#include <cstring>
+#include <fstream>
+#include <iterator>
 
 #include <fmt/format.h>
 
@@ -69,6 +72,10 @@ Result<CodegenContext> CodegenContext::Create(const std::filesystem::path& confi
   ctx.binary_ = BinaryView::fromModule(*module);
   ctx.resolver_ = runtime.export_resolver();
 
+  if (auto patched = ctx.applyImagePatches(); !patched) {
+    return Err<CodegenContext>(patched.error());
+  }
+
   REXCODEGEN_TRACE("Loaded XEX: base=0x{:08X}, size=0x{:X}, entry=0x{:08X}",
                    ctx.binary_.baseAddress(), ctx.binary_.imageSize(), ctx.binary_.entryPoint());
 
@@ -79,6 +86,39 @@ Result<CodegenContext> CodegenContext::Create(const std::filesystem::path& confi
   ctx.analysisState_.imageSize = ctx.binary_.imageSize();
 
   return ctx;
+}
+
+// image_patches: records laid over the image before analysis.
+Result<void> CodegenContext::applyImagePatches() {
+  for (const auto& name : config_.imagePatches) {
+    auto path = configDir_ / name;
+    std::ifstream file(path, std::ios::binary);
+    std::vector<uint8_t> data((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+    auto be32 = [&](size_t at) {
+      return uint32_t(data[at]) << 24 | uint32_t(data[at + 1]) << 16 | uint32_t(data[at + 2]) << 8 | data[at + 3];
+    };
+    if (data.size() < 0x20 || std::memcmp(data.data(), "MECR", 4) != 0) {
+      return Err<void>(ErrorCategory::Format,
+                                 fmt::format("image patch {}: not a records file", path.string()));
+    }
+    uint32_t count = be32(8);
+    size_t at = 0x20, bytes = 0;
+    for (uint32_t i = 0; i < count; i++) {
+      if (at + 8 > data.size() || at + 8 + be32(at + 4) > data.size()) {
+        return Err<void>(ErrorCategory::Format,
+                                   fmt::format("image patch {}: record {} runs past the end", path.string(), i));
+      }
+      uint32_t address = be32(at), size = be32(at + 4);
+      if (!binary_.patch(address, data.data() + at + 8, size)) {
+        return Err<void>(ErrorCategory::Format,
+                                   fmt::format("image patch {}: 0x{:08X} (+{}) not in a loaded section",
+                                               path.string(), address, size));
+      }
+      at += 8 + size, bytes += size;
+    }
+    REXCODEGEN_INFO("Image patch {}: {} records, {} bytes", path.string(), count, bytes);
+  }
+  return Ok();
 }
 
 CodegenContext CodegenContext::Create(BinaryView binary, RecompilerConfig config) {

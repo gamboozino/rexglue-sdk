@@ -101,6 +101,11 @@ struct RecompilerConfig {
   /// Vector registers kept in the shared context even when non-volatiles are locals: ones the
   /// game's code passes values in between functions (shared_vector_registers = [64, 65, ...]).
   std::bitset<128> sharedVectorRegisters;
+  /// Files of records laid over the loaded image before analysis (image_patches = ["a.bin"],
+  /// relative to the config): new code to recompile with the game's. Format: "MECR", the record
+  /// count (u32 big-endian) at 8, records from 0x20, each address and size (u32 big-endian) then
+  /// the bytes.
+  std::vector<std::string> imagePatches;
   bool generateExceptionHandlers = false;  ///< Generate SEH exception handler wrappers
 
   // === Analysis tuning (optional) ===

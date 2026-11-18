@@ -65,6 +65,9 @@ std::vector<std::filesystem::path> CollectModuleInputs(const RecompilerConfig& c
   for (const auto& loaded : cfg.loadedFiles) {
     inputs.emplace_back(loaded);
   }
+  for (const auto& patch : cfg.imagePatches) {
+    inputs.push_back(configDir / patch);
+  }
   if (!cfg.templateDir.empty()) {
     std::error_code ec;
     for (const auto& entry : fs::recursive_directory_iterator(configDir / cfg.templateDir, ec)) {
@@ -317,6 +320,9 @@ Result<void> ProjectRecompiler::Run(const ProjectRecompilerOptions& opts) {
     auto ctx = CodegenContext::Create(std::move(bv), std::move(cfg));
     ctx.setResolver(resolver);
     ctx.setConfigDir(configDir);
+    if (auto patched = ctx.applyImagePatches(); !patched) {
+      return Err<void>(patched.error());
+    }
     ctx.analysisState().format = "xex";
     ctx.analysisState().loadAddress = ctx.binary().baseAddress();
     ctx.analysisState().entryPoint = ctx.binary().entryPoint();

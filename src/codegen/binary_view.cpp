@@ -8,6 +8,7 @@
  *              See LICENSE file in the project root for full license text.
  */
 
+#include <cstring>
 #include <limits>
 
 #include <rex/codegen/binary_view.h>
@@ -138,4 +139,46 @@ const SectionView* BinaryView::findSectionByName(std::string_view name) const {
   return nullptr;
 }
 
+}  // namespace rex::codegen
+
+namespace rex::codegen {
+bool BinaryView::patch(uint32_t addr, const uint8_t* data, size_t size) {
+  // Into a loaded section where it falls in one; bytes past every section (code caves at a
+  // section's end, in its last page) go into an executable section of their own.
+  while (size > 0) {
+    const SectionView* in = nullptr;
+    size_t index = 0;
+    for (size_t i = 0; i < sections_.size(); i++) {
+      if (addr >= sections_[i].baseAddress && addr < sections_[i].baseAddress + sections_[i].size) {
+        in = &sections_[i], index = i;
+        break;
+      }
+    }
+    if (in) {
+      size_t n = std::min<size_t>(size, in->baseAddress + in->size - addr);
+      std::memcpy(sectionData_[index].data() + (addr - in->baseAddress), data, n);
+      addr += uint32_t(n), data += n, size -= n;
+      continue;
+    }
+    // (up to the next section's start)
+    uint64_t next = uint64_t(baseAddress_) + imageSize_;
+    for (const auto& section : sections_) {
+      if (section.baseAddress > addr && section.baseAddress < next) {
+        next = section.baseAddress;
+      }
+    }
+    if (addr < baseAddress_ || addr >= next) {
+      return false;
+    }
+    size_t n = std::min<size_t>(size, next - addr);
+    sectionData_.emplace_back(data, data + n);
+    sections_.push_back(SectionView{.name = "patch",
+                                    .baseAddress = addr,
+                                    .size = uint32_t(n),
+                                    .data = sectionData_.back().data(),
+                                    .executable = true});
+    addr += uint32_t(n), data += n, size -= n;
+  }
+  return true;
+}
 }  // namespace rex::codegen
