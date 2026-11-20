@@ -373,6 +373,17 @@ u32 KeQueryPerformanceFrequency_entry() {
   return static_cast<uint32_t>(result);
 }
 
+}  // namespace rex::kernel::xboxkrnl
+
+namespace rex {
+std::atomic<WaitObserver> g_wait_observer{nullptr};
+void SetWaitObserver(WaitObserver observer) {
+  g_wait_observer.store(observer);
+}
+}  // namespace rex
+
+namespace rex::kernel::xboxkrnl {
+
 u32 KeDelayExecutionThread_entry(u32 processor_mode, u32 alertable, mapped_u64 interval_ptr) {
   XThread* thread = XThread::GetCurrentThread();
 
@@ -1447,8 +1458,8 @@ REX_EXPORT(__imp__KeGetCurrentProcessType, rex::kernel::xboxkrnl::KeGetCurrentPr
 REX_EXPORT(__imp__KeSetCurrentProcessType, rex::kernel::xboxkrnl::KeSetCurrentProcessType_entry)
 REX_EXPORT(__imp__KeQueryPerformanceFrequency,
            rex::kernel::xboxkrnl::KeQueryPerformanceFrequency_entry)
-REX_EXPORT(__imp__KeDelayExecutionThread, rex::kernel::xboxkrnl::KeDelayExecutionThread_entry)
-REX_EXPORT(__imp__NtYieldExecution, rex::kernel::xboxkrnl::NtYieldExecution_entry)
+REX_EXPORT_TIMED(__imp__KeDelayExecutionThread, rex::kernel::xboxkrnl::KeDelayExecutionThread_entry)
+REX_EXPORT_TIMED(__imp__NtYieldExecution, rex::kernel::xboxkrnl::NtYieldExecution_entry)
 REX_EXPORT(__imp__KeQuerySystemTime, rex::kernel::xboxkrnl::KeQuerySystemTime_entry)
 REX_EXPORT(__imp__KeTlsAlloc, rex::kernel::xboxkrnl::KeTlsAlloc_entry)
 REX_EXPORT(__imp__KeTlsFree, rex::kernel::xboxkrnl::KeTlsFree_entry)
@@ -1472,12 +1483,12 @@ REX_EXPORT(__imp__NtCreateTimer, rex::kernel::xboxkrnl::NtCreateTimer_entry)
 REX_EXPORT(__imp__NtSetTimerEx, rex::kernel::xboxkrnl::NtSetTimerEx_entry)
 REX_EXPORT(__imp__NtCancelTimer, rex::kernel::xboxkrnl::NtCancelTimer_entry)
 REX_EXPORT(__imp__KeInitializeTimerEx, rex::kernel::xboxkrnl::KeInitializeTimerEx_entry)
-REX_EXPORT(__imp__KeWaitForSingleObject, rex::kernel::xboxkrnl::KeWaitForSingleObject_entry)
-REX_EXPORT(__imp__NtWaitForSingleObjectEx, rex::kernel::xboxkrnl::NtWaitForSingleObjectEx_entry)
-REX_EXPORT(__imp__KeWaitForMultipleObjects, rex::kernel::xboxkrnl::KeWaitForMultipleObjects_entry)
-REX_EXPORT(__imp__NtWaitForMultipleObjectsEx,
+REX_EXPORT_TIMED(__imp__KeWaitForSingleObject, rex::kernel::xboxkrnl::KeWaitForSingleObject_entry)
+REX_EXPORT_TIMED(__imp__NtWaitForSingleObjectEx, rex::kernel::xboxkrnl::NtWaitForSingleObjectEx_entry)
+REX_EXPORT_TIMED(__imp__KeWaitForMultipleObjects, rex::kernel::xboxkrnl::KeWaitForMultipleObjects_entry)
+REX_EXPORT_TIMED(__imp__NtWaitForMultipleObjectsEx,
            rex::kernel::xboxkrnl::NtWaitForMultipleObjectsEx_entry)
-REX_EXPORT(__imp__NtSignalAndWaitForSingleObjectEx,
+REX_EXPORT_TIMED(__imp__NtSignalAndWaitForSingleObjectEx,
            rex::kernel::xboxkrnl::NtSignalAndWaitForSingleObjectEx_entry)
 REX_EXPORT(__imp__KfAcquireSpinLock, rex::kernel::xboxkrnl::KfAcquireSpinLock_entry)
 REX_EXPORT(__imp__KfReleaseSpinLock, rex::kernel::xboxkrnl::KfReleaseSpinLock_entry)

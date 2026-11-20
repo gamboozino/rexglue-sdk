@@ -618,7 +618,7 @@ REX_EXPORT(__imp__RtlInitializeCriticalSection,
            rex::kernel::xboxkrnl::RtlInitializeCriticalSection_entry)
 REX_EXPORT(__imp__RtlInitializeCriticalSectionAndSpinCount,
            rex::kernel::xboxkrnl::RtlInitializeCriticalSectionAndSpinCount_entry)
-REX_EXPORT(__imp__RtlEnterCriticalSection, rex::kernel::xboxkrnl::RtlEnterCriticalSection_entry)
+REX_EXPORT_TIMED(__imp__RtlEnterCriticalSection, rex::kernel::xboxkrnl::RtlEnterCriticalSection_entry)
 REX_EXPORT(__imp__RtlTryEnterCriticalSection,
            rex::kernel::xboxkrnl::RtlTryEnterCriticalSection_entry)
 REX_EXPORT(__imp__RtlLeaveCriticalSection, rex::kernel::xboxkrnl::RtlLeaveCriticalSection_entry)

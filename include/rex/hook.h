@@ -11,6 +11,8 @@
 
 #pragma once
 
+#include <atomic>
+#include <chrono>
 #include <cstring>
 #include <tuple>
 #include <type_traits>
@@ -23,6 +25,15 @@
 #include <rex/system/kernel_state.h>
 #include <rex/system/thread_state.h>
 #include <rex/types.h>
+
+namespace rex {
+// Called after each timed kernel export (waits and sleeps) while set. The
+// variable lives in the runtime (a DLL on Windows): the game sets it through
+// SetWaitObserver.
+using WaitObserver = void (*)(const char* name, uint32_t lr, uint32_t r3, int64_t ns);
+extern std::atomic<WaitObserver> g_wait_observer;
+void SetWaitObserver(WaitObserver observer);
+}  // namespace rex
 
 //=============================================================================
 // Hook Macros
@@ -71,6 +82,25 @@
 // Export: hook + register in global registry for kernel ordinal lookup.
 #define REX_EXPORT(name, function) \
   REX_HOOK(name, function)         \
+  static rex::ppc::detail::PPCFuncRegistrar _ppc_reg_##name(#name, &name);
+
+// Timed export: when a wait observer is set (profiling), reports how long the
+// call took, the guest caller (lr) and its first argument (r3).
+#define REX_EXPORT_TIMED(name, function)                                             \
+  extern "C" REX_FUNC(name) {                                                        \
+    auto ___observer = rex::g_wait_observer.load(std::memory_order_relaxed);         \
+    if (!___observer) {                                                              \
+      rex::ppc::HostToGuestFunction<function>(ctx, base);                            \
+      return;                                                                        \
+    }                                                                                \
+    uint32_t ___lr = static_cast<uint32_t>(ctx.lr), ___r3 = ctx.r3.u32;              \
+    auto ___start = std::chrono::steady_clock::now();                                \
+    rex::ppc::HostToGuestFunction<function>(ctx, base);                              \
+    ___observer(#name, ___lr, ___r3,                                                 \
+                std::chrono::duration_cast<std::chrono::nanoseconds>(                \
+                    std::chrono::steady_clock::now() - ___start)                     \
+                    .count());                                                       \
+  }                                                                                  \
   static rex::ppc::detail::PPCFuncRegistrar _ppc_reg_##name(#name, &name);
 
 #define REX_EXPORT_STUB(name) \
