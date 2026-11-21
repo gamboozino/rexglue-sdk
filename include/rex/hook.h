@@ -33,6 +33,13 @@ namespace rex {
 using WaitObserver = void (*)(const char* name, uint32_t lr, uint32_t r3, int64_t ns);
 extern std::atomic<WaitObserver> g_wait_observer;
 void SetWaitObserver(WaitObserver observer);
+// Called after a critical section's full wait while set (the section owned
+// by then): the thread that held it as the wait began (its handle, 0 if
+// unknown) and its last call there (ctx.lr), the section's guest address and
+// the wait's time.
+using LockObserver = void (*)(uint32_t holder_handle, uint32_t holder_lr, uint32_t cs, int64_t ns);
+extern std::atomic<LockObserver> g_lock_observer;
+void SetLockObserver(LockObserver observer);
 }  // namespace rex
 
 //=============================================================================

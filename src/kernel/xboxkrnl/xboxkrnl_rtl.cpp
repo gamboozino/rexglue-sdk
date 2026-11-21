@@ -13,6 +13,7 @@
 #pragma GCC diagnostic ignored "-Wunused-parameter"
 
 #include <algorithm>
+#include <chrono>
 #include <string>
 
 #include <rex/chrono/chrono_steady_cast.h>
@@ -398,8 +399,41 @@ void RtlEnterCriticalSection_entry(ppc_ptr_t<X_RTL_CRITICAL_SECTION> cs) {
   }
 
   if (rex::thread::atomic_inc(&cs->lock_count) != 0) {
+    // (a lock observer: who held it, and where; reported once this thread
+    // owns the section, so the report's own time isn't spent holding it
+    // unowned)
+    auto observer = rex::g_lock_observer.load(std::memory_order_relaxed);
+    uint32_t holder_handle = 0, holder_lr = 0;
+    std::chrono::steady_clock::time_point start;
+    if (observer) {
+      // The owner's thread object by the handle its header holds, never made
+      // anew (a stale owner's memory may hold another object, or none)
+      if (uint32_t owner = cs->owning_thread) {
+        auto header = REX_KERNEL_MEMORY()->TranslateVirtual<X_DISPATCH_HEADER*>(owner);
+        if (header->type == 6 && header->wait_list_flink == kXObjSignature) {
+          if (auto holder = REX_KERNEL_OBJECTS()->LookupObject<XThread>(header->wait_list_blink)) {
+            holder_handle = holder->handle();
+            if (auto* state = holder->thread_state()) {
+              holder_lr = uint32_t(state->context()->lr);
+            }
+          }
+        }
+      }
+      start = std::chrono::steady_clock::now();
+    }
     // Create a full waiter.
     xeKeWaitForSingleObject(reinterpret_cast<void*>(cs.host_address()), 8, 0, 0, nullptr);
+    int64_t waited = observer ? std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                    std::chrono::steady_clock::now() - start)
+                                    .count()
+                              : 0;
+    assert_true(cs->owning_thread == 0);
+    cs->owning_thread = cur_thread;
+    cs->recursion_count = 1;
+    if (observer) {
+      observer(holder_handle, holder_lr, cs.guest_address(), waited);
+    }
+    return;
   }
 
   assert_true(cs->owning_thread == 0);

@@ -380,6 +380,10 @@ std::atomic<WaitObserver> g_wait_observer{nullptr};
 void SetWaitObserver(WaitObserver observer) {
   g_wait_observer.store(observer);
 }
+std::atomic<LockObserver> g_lock_observer{nullptr};
+void SetLockObserver(LockObserver observer) {
+  g_lock_observer.store(observer);
+}
 }  // namespace rex
 
 namespace rex::kernel::xboxkrnl {
