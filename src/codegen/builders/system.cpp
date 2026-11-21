@@ -251,8 +251,6 @@ bool build_mflr(BuilderContext& ctx) {
 
 bool build_mfmsr(BuilderContext& ctx) {
   if (!ctx.config().skipMsr) {
-    // Memory barrier for MSR read
-    ctx.println("\tstd::atomic_thread_fence(std::memory_order_seq_cst);");
     // Check global lock and return appropriate value
     // Returns 0x8000 if unlocked (interrupts enabled), 0 if locked
     ctx.println("\t{}.u64 = REX_CHECK_GLOBAL_LOCK();", ctx.r(ctx.insn.operands[0]));
@@ -319,8 +317,6 @@ bool build_mtlr(BuilderContext& ctx) {
 
 bool build_mtmsrd(BuilderContext& ctx) {
   if (!ctx.config().skipMsr) {
-    // Memory barrier for MSR write
-    ctx.println("\tstd::atomic_thread_fence(std::memory_order_seq_cst);");
     // Update MSR bits
     ctx.println("\tctx.msr = ({}.u32 & 0x8020) | (ctx.msr & ~0x8020);",
                 ctx.r(ctx.insn.operands[0]));

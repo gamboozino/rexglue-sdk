@@ -557,8 +557,9 @@ bool build_vcmpbfp(BuilderContext& ctx) {
   ctx.emit_set_flush_mode(true);
   // vcmpbfp: Vector Compare Bounds Floating Point
   // For each element i:
-  //   bit 0 (0x80000000) = 1 if vSrcA[i] > vSrcB[i]
-  //   bit 1 (0x40000000) = 1 if vSrcA[i] < -vSrcB[i]
+  //   bit 0 (0x80000000) = 1 unless vSrcA[i] <= vSrcB[i]
+  //   bit 1 (0x40000000) = 1 unless vSrcA[i] >= -vSrcB[i]
+  // (so a NaN in either sets both; cmpgt/cmplt would give 0 for NaN)
   auto vA = ctx.v(ctx.insn.operands[1]);
   auto vB = ctx.v(ctx.insn.operands[2]);
   auto vD = ctx.v(ctx.insn.operands[0]);
@@ -566,12 +567,12 @@ bool build_vcmpbfp(BuilderContext& ctx) {
   // Use v_temp as intermediate storage
   // gt_mask = (vA > vB) & 0x80000000
   ctx.println(
-      "\tsimde_mm_store_ps({}.f32, simde_mm_and_ps(simde_mm_cmpgt_ps(simde_mm_load_ps({}.f32), "
+      "\tsimde_mm_store_ps({}.f32, simde_mm_andnot_ps(simde_mm_cmple_ps(simde_mm_load_ps({}.f32), "
       "simde_mm_load_ps({}.f32)), simde_mm_castsi128_ps(simde_mm_set1_epi32(int(0x80000000)))));",
       ctx.v_temp(), vA, vB);
   // lt_neg_mask = (vA < -vB) & 0x40000000
   ctx.println(
-      "\tsimde_mm_store_ps({}.f32, simde_mm_and_ps(simde_mm_cmplt_ps(simde_mm_load_ps({}.f32), "
+      "\tsimde_mm_store_ps({}.f32, simde_mm_andnot_ps(simde_mm_cmpge_ps(simde_mm_load_ps({}.f32), "
       "simde_mm_xor_ps(simde_mm_load_ps({}.f32), "
       "simde_mm_castsi128_ps(simde_mm_set1_epi32(int(0x80000000))))), "
       "simde_mm_castsi128_ps(simde_mm_set1_epi32(int(0x40000000)))));",
@@ -585,12 +586,15 @@ bool build_vcmpbfp(BuilderContext& ctx) {
   // CR6 from vD: movemask_ps only checks bit 31, but lower-bound violations only
   // set bit 30. Shift left by 1 to move bit 30 into bit 31, then OR with original
   // so movemask detects both upper and lower bound violations.
-  if (isRecordForm(ctx.insn))
+  if (isRecordForm(ctx.insn)) {
     ctx.println(
         "\t{}.setFromMask(simde_mm_castsi128_ps(simde_mm_or_si128("
         "simde_mm_load_si128((simde__m128i*){}.f32), "
         "simde_mm_slli_epi32(simde_mm_load_si128((simde__m128i*){}.f32), 1))), 0xF);",
         ctx.cr(6), vD, vD);
+    // vcmpbfp. only ever sets CR6 bit 2 (all in bounds); bit 0 stays clear
+    ctx.println("\t{}.lt = 0;", ctx.cr(6));
+  }
   return true;
 }
 
@@ -1098,14 +1102,14 @@ bool build_vpkuhus(BuilderContext& ctx) {
   // NOTE(tomc): _mm_packus_epi16 treats inputs as signed, so we need custom saturation for
   // unsigned. Unsigned halfwords >= 0x8000 would be interpreted as negative and clamped to 0
   // instead of 0xFF.
+  // vD can alias vA/vB, so pack into vTemp first.
   for (size_t i = 0; i < 8; i++) {
-    ctx.println("\t{}.u8[{}] = {}.u16[{}] > 0xFF ? 0xFF : (uint8_t){}.u16[{}];",
-                ctx.v(ctx.insn.operands[0]), 15 - i, ctx.v(ctx.insn.operands[1]), 7 - i,
-                ctx.v(ctx.insn.operands[1]), 7 - i);
-    ctx.println("\t{}.u8[{}] = {}.u16[{}] > 0xFF ? 0xFF : (uint8_t){}.u16[{}];",
-                ctx.v(ctx.insn.operands[0]), 7 - i, ctx.v(ctx.insn.operands[2]), 7 - i,
-                ctx.v(ctx.insn.operands[2]), 7 - i);
+    ctx.println("\t{}.u8[{}] = {}.u16[{}] > 0xFF ? 0xFF : (uint8_t){}.u16[{}];", ctx.v_temp(),
+                15 - i, ctx.v(ctx.insn.operands[1]), 7 - i, ctx.v(ctx.insn.operands[1]), 7 - i);
+    ctx.println("\t{}.u8[{}] = {}.u16[{}] > 0xFF ? 0xFF : (uint8_t){}.u16[{}];", ctx.v_temp(),
+                7 - i, ctx.v(ctx.insn.operands[2]), 7 - i, ctx.v(ctx.insn.operands[2]), 7 - i);
   }
+  ctx.println("\t{} = {};", ctx.v(ctx.insn.operands[0]), ctx.v_temp());
   return true;
 }
 
@@ -1126,14 +1130,14 @@ bool build_vpkuwus(BuilderContext& ctx) {
 
   // NOTE(tomc): _mm_packus_epi32 treats inputs as signed, so we need custom saturation for unsigned
   // Saturate each u32 to [0, 0xFFFF], then pack to u16
+  // vD can alias vA/vB, so pack into vTemp first.
   for (size_t i = 0; i < 4; i++) {
-    ctx.println("\t{}.u16[{}] = {}.u32[{}] > 0xFFFF ? 0xFFFF : (uint16_t){}.u32[{}];",
-                ctx.v(ctx.insn.operands[0]), 7 - i, ctx.v(ctx.insn.operands[1]), 3 - i,
-                ctx.v(ctx.insn.operands[1]), 3 - i);
-    ctx.println("\t{}.u16[{}] = {}.u32[{}] > 0xFFFF ? 0xFFFF : (uint16_t){}.u32[{}];",
-                ctx.v(ctx.insn.operands[0]), 3 - i, ctx.v(ctx.insn.operands[2]), 3 - i,
-                ctx.v(ctx.insn.operands[2]), 3 - i);
+    ctx.println("\t{}.u16[{}] = {}.u32[{}] > 0xFFFF ? 0xFFFF : (uint16_t){}.u32[{}];", ctx.v_temp(),
+                7 - i, ctx.v(ctx.insn.operands[1]), 3 - i, ctx.v(ctx.insn.operands[1]), 3 - i);
+    ctx.println("\t{}.u16[{}] = {}.u32[{}] > 0xFFFF ? 0xFFFF : (uint16_t){}.u32[{}];", ctx.v_temp(),
+                3 - i, ctx.v(ctx.insn.operands[2]), 3 - i, ctx.v(ctx.insn.operands[2]), 3 - i);
   }
+  ctx.println("\t{} = {};", ctx.v(ctx.insn.operands[0]), ctx.v_temp());
   return true;
 }
 
@@ -1278,6 +1282,9 @@ bool build_vpkd3d128(BuilderContext& ctx) {
 
     case 3:  // FLOAT16_2 - pack 2 floats to 2 float16s
     {
+      // vD may be vB: read a copy, since vD is written element by element
+      ctx.println("\t{{");
+      ctx.println("\tconst PPCVRegister vSource = {};", ctx.v(ctx.insn.operands[1]));
       // Pack 2 elements into 32 bits (1 word)
       // Guest element 0 goes to high 16 bits, element 1 to low 16 bits
       // Output u16 index = (1-i) + 2*shift for element i
@@ -1285,45 +1292,53 @@ bool build_vpkd3d128(BuilderContext& ctx) {
         size_t srcIdx = 3 - i;  // Guest element i is at host array index 3-i
         size_t dstIdx =
             (1 - i) + (2 * ctx.insn.operands[4]);  // Output reversed: elem 0 to high, elem 1 to low
-        ctx.println("\t{}.u32 = ({}.u32[{}]&0x7FFFFFFF);", ctx.temp(), ctx.v(ctx.insn.operands[1]),
+        ctx.println("\t{}.u32 = ({}.u32[{}]&0x7FFFFFFF);", ctx.temp(), "vSource",
                     srcIdx);
         ctx.println(
             "\t{0}.u8[0] = ({1}.f32 != {1}.f32) || ({1}.f32 > 65504.0f) ? 0xFF : "
             "(({2}.u32[{3}]&0x7f800000)>>23);",
-            ctx.v_temp(), ctx.temp(), ctx.v(ctx.insn.operands[1]), srcIdx);
+            ctx.v_temp(), ctx.temp(), "vSource", srcIdx);
         ctx.println("\t{}.u16 = {}.u8[0] != 0xFF ? (({}.u32[{}]&0x7FE000)>>13) : 0x0;", ctx.temp(),
-                    ctx.v_temp(), ctx.v(ctx.insn.operands[1]), srcIdx);
+                    ctx.v_temp(), "vSource", srcIdx);
         ctx.println(
             "\t{0}.u16[{1}] = {2}.u8[0] != 0xFF ? ({2}.u8[0] > 0x70 ? "
             "((({2}.u8[0]-0x70)<<10)+{3}.u16) : (0x71-{2}.u8[0] > 31 ? 0x0 : "
             "((0x400+{3}.u16)>>(0x71-{2}.u8[0])))) : 0x7FFF;",
             ctx.v(ctx.insn.operands[0]), dstIdx, ctx.v_temp(), ctx.temp());
         ctx.println("\t{}.u16[{}] |= (({}.u32[{}]&0x80000000)>>16);", ctx.v(ctx.insn.operands[0]),
-                    dstIdx, ctx.v(ctx.insn.operands[1]), srcIdx);
+                    dstIdx, "vSource", srcIdx);
       }
+      ctx.println("\t}}");
       break;
     }
 
     case 4:  // NORMSHORT4 - pack 4 floats (in 3.0+X form) to 4 signed shorts
     {
+      // vD may be vB: read a copy, since vD is written element by element
+      ctx.println("\t{{");
+      ctx.println("\tconst PPCVRegister vSource = {};", ctx.v(ctx.insn.operands[1]));
       // Pack 4 elements into 64 bits (2 words)
       // Guest element 0 goes to highest 16-bit position, element 3 to lowest
       // Output u16 index = (3-i) + 2*shift for element i
       for (size_t i = 0; i < 4; i++) {
         size_t srcIdx = 3 - i;  // Guest element i is at host array index 3-i
         size_t dstIdx = (3 - i) + (2 * ctx.insn.operands[4]);  // Output also reversed
-        ctx.println("\t{}.s32 = {}.s32[{}] - 0x40400000;", ctx.temp(), ctx.v(ctx.insn.operands[1]),
+        ctx.println("\t{}.s32 = {}.s32[{}] - 0x40400000;", ctx.temp(), "vSource",
                     srcIdx);
         ctx.println("\t{}.s32 = {}.s32 > 32767 ? 32767 : ({}.s32 < -32767 ? -32767 : {}.s32);",
                     ctx.temp(), ctx.temp(), ctx.temp(), ctx.temp());
         ctx.println("\t{}.u16[{}] = uint16_t({}.s32);", ctx.v(ctx.insn.operands[0]), dstIdx,
                     ctx.temp());
       }
+      ctx.println("\t}}");
       break;
     }
 
     case 5:  // float16_4
     {
+      // vD may be vB: read a copy, since vD is written element by element
+      ctx.println("\t{{");
+      ctx.println("\tconst PPCVRegister vSource = {};", ctx.v(ctx.insn.operands[1]));
       // Pack 4 elements into 64 bits (4 x 16-bit floats)
       // Guest element 0 goes to highest 16-bit position, element 3 to lowest
       // Output u16 index = (3-i) + 2*shift for element i
@@ -1333,22 +1348,23 @@ bool build_vpkd3d128(BuilderContext& ctx) {
       for (size_t i = 0; i < 4; i++) {
         size_t srcIdx = 3 - i;  // Guest element i is at host array index 3-i
         size_t dstIdx = (3 - i) + (2 * ctx.insn.operands[4]);  // Output also reversed
-        ctx.println("\t{}.u32 = ({}.u32[{}]&0x7FFFFFFF);", ctx.temp(), ctx.v(ctx.insn.operands[1]),
+        ctx.println("\t{}.u32 = ({}.u32[{}]&0x7FFFFFFF);", ctx.temp(), "vSource",
                     srcIdx);
         ctx.println(
             "\t{0}.u8[0] = ({1}.f32 != {1}.f32) || ({1}.f32 > 65504.0f) ? 0xFF : "
             "(({2}.u32[{3}]&0x7f800000)>>23);",
-            ctx.v_temp(), ctx.temp(), ctx.v(ctx.insn.operands[1]), srcIdx);
+            ctx.v_temp(), ctx.temp(), "vSource", srcIdx);
         ctx.println("\t{}.u16 = {}.u8[0] != 0xFF ? (({}.u32[{}]&0x7FE000)>>13) : 0x0;", ctx.temp(),
-                    ctx.v_temp(), ctx.v(ctx.insn.operands[1]), srcIdx);
+                    ctx.v_temp(), "vSource", srcIdx);
         ctx.println(
             "\t{0}.u16[{1}] = {2}.u8[0] != 0xFF ? ({2}.u8[0] > 0x70 ? "
             "((({2}.u8[0]-0x70)<<10)+{3}.u16) : (0x71-{2}.u8[0] > 31 ? 0x0 : "
             "((0x400+{3}.u16)>>(0x71-{2}.u8[0])))) : 0x7FFF;",
             ctx.v(ctx.insn.operands[0]), dstIdx, ctx.v_temp(), ctx.temp());
         ctx.println("\t{}.u16[{}] |= (({}.u32[{}]&0x80000000)>>16);", ctx.v(ctx.insn.operands[0]),
-                    dstIdx, ctx.v(ctx.insn.operands[1]), srcIdx);
+                    dstIdx, "vSource", srcIdx);
       }
+      ctx.println("\t}}");
       break;
     }
 
