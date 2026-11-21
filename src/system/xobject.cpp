@@ -200,6 +200,24 @@ uint32_t XObject::TimeoutTicksToMs(int64_t timeout_ticks) {
   }
 }
 
+// After a wait timed out. A poll (no timeout: is it signalled yet?) yields
+// only every 64th time on a thread: a game that polls a list of events
+// under a lock paid a yield each, and on a busy Linux system a yield gives
+// the core away for a scheduler tick (about 1 ms a poll on a PS5 with Linux,
+// the main thread waiting 600 ms a second for that lock, #127). The
+// occasional yield still lets a thread polling in a loop make way.
+// (a poll by the guest's own value: a timeout under a millisecond is 0 ms here
+// too, and keeps its yield)
+static void YieldAfterTimeout(const uint64_t* opt_timeout) {
+  if (opt_timeout && *opt_timeout == 0) {
+    thread_local uint32_t polls = 0;
+    if (++polls % 64 != 0) {
+      return;
+    }
+  }
+  rex::thread::MaybeYield();
+}
+
 X_STATUS XObject::Wait(uint32_t wait_reason, uint32_t processor_mode, uint32_t alertable,
                        uint64_t* opt_timeout) {
   auto wait_handle = GetWaitHandle();
@@ -223,7 +241,7 @@ X_STATUS XObject::Wait(uint32_t wait_reason, uint32_t processor_mode, uint32_t a
       // Or X_STATUS_ALERTED?
       return X_STATUS_USER_APC;
     case rex::thread::WaitResult::kTimeout:
-      rex::thread::MaybeYield();
+      YieldAfterTimeout(opt_timeout);
       return X_STATUS_TIMEOUT;
     default:
     case rex::thread::WaitResult::kAbandoned:
@@ -250,7 +268,7 @@ X_STATUS XObject::SignalAndWait(XObject* signal_object, XObject* wait_object, ui
       // Or X_STATUS_ALERTED?
       return X_STATUS_USER_APC;
     case rex::thread::WaitResult::kTimeout:
-      rex::thread::MaybeYield();
+      YieldAfterTimeout(opt_timeout);
       return X_STATUS_TIMEOUT;
     default:
     case rex::thread::WaitResult::kAbandoned:
@@ -286,7 +304,7 @@ X_STATUS XObject::WaitMultiple(uint32_t count, XObject** objects, uint32_t wait_
         // Or X_STATUS_ALERTED?
         return X_STATUS_USER_APC;
       case rex::thread::WaitResult::kTimeout:
-        rex::thread::MaybeYield();
+        YieldAfterTimeout(opt_timeout);
         return X_STATUS_TIMEOUT;
       default:
       case rex::thread::WaitResult::kAbandoned:
@@ -309,7 +327,7 @@ X_STATUS XObject::WaitMultiple(uint32_t count, XObject** objects, uint32_t wait_
         // Or X_STATUS_ALERTED?
         return X_STATUS_USER_APC;
       case rex::thread::WaitResult::kTimeout:
-        rex::thread::MaybeYield();
+        YieldAfterTimeout(opt_timeout);
         return X_STATUS_TIMEOUT;
       default:
       case rex::thread::WaitResult::kAbandoned:

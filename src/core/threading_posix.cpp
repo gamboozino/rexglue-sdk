@@ -346,6 +346,12 @@ class PosixConditionBase {
       if (timeout == std::chrono::milliseconds::max()) {
         cond_.wait(lock, predicate);
         executed = true;  // Did not time out;
+      } else if (timeout.count() == 0) {
+        // A poll: not signalled, so timed out, without a timed wait. (One
+        // whose time is already up still sleeps until the system timer's
+        // next tick where its timers are coarse: about 1 ms a poll on a PS5
+        // with Linux, #127.)
+        executed = false;
       } else {
         executed = cond_.wait_for(lock, timeout, predicate);
       }
@@ -1269,16 +1275,18 @@ WaitResult Wait(WaitHandle* wait_handle, bool is_alertable, std::chrono::millise
     if (DispatchCurrentThreadUserCallback(condition, ticket)) {
       return WaitResult::kUserCallback;
     }
-    if (HasAlertableTimeoutElapsed(deadline)) {
-      condition.Dequeue(ticket);
-      return WaitResult::kTimeout;
-    }
+    // Tried before the deadline is checked: a wait whose time is already up
+    // (timeout 0, a poll) still takes the object when it is signalled.
     auto result = condition.WaitQueued(ticket, ComputeAlertableWaitTimeout(deadline), false);
     if (result != WaitResult::kTimeout) {
       if (result != WaitResult::kSuccess) {
         condition.Dequeue(ticket);
       }
       return result;
+    }
+    if (HasAlertableTimeoutElapsed(deadline)) {
+      condition.Dequeue(ticket);
+      return WaitResult::kTimeout;
     }
   }
 }
@@ -1311,16 +1319,18 @@ WaitResult SignalAndWait(WaitHandle* wait_handle_to_signal, WaitHandle* wait_han
     if (DispatchCurrentThreadUserCallback(wait_on, ticket)) {
       return WaitResult::kUserCallback;
     }
-    if (HasAlertableTimeoutElapsed(deadline)) {
-      wait_on.Dequeue(ticket);
-      return WaitResult::kTimeout;
-    }
+    // Tried before the deadline is checked: a wait whose time is already up
+    // (timeout 0, a poll) still takes the object when it is signalled.
     result = wait_on.WaitQueued(ticket, ComputeAlertableWaitTimeout(deadline), false);
     if (result != WaitResult::kTimeout) {
       if (result != WaitResult::kSuccess) {
         wait_on.Dequeue(ticket);
       }
       return result;
+    }
+    if (HasAlertableTimeoutElapsed(deadline)) {
+      wait_on.Dequeue(ticket);
+      return WaitResult::kTimeout;
     }
   }
 }
@@ -1347,13 +1357,15 @@ std::pair<WaitResult, size_t> WaitMultiple(WaitHandle* wait_handles[], size_t wa
     if (DispatchCurrentThreadUserCallback()) {
       return std::make_pair(WaitResult::kUserCallback, 0);
     }
-    if (HasAlertableTimeoutElapsed(deadline)) {
-      return std::make_pair(WaitResult::kTimeout, 0);
-    }
+    // Tried before the deadline is checked: a wait whose time is already up
+    // (timeout 0, a poll) still takes the object when it is signalled.
     auto result = PosixConditionBase::WaitMultiple(std::vector<PosixConditionBase*>(conditions),
                                                    wait_all, ComputeAlertableWaitTimeout(deadline));
     if (result.first != WaitResult::kTimeout) {
       return result;
+    }
+    if (HasAlertableTimeoutElapsed(deadline)) {
+      return std::make_pair(WaitResult::kTimeout, 0);
     }
   }
 }
