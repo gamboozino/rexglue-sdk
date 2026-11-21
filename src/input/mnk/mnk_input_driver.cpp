@@ -451,7 +451,13 @@ void MnkInputDriver::ReleaseMouseCaptureFromUIThread(rex::ui::Window* window) {
     return;
   }
   mouse_captured_ = false;
-  window->SetCursorVisibility(precapture_cursor_visibility_);
+  // A pointer shown before the capture (the window's own default) comes back
+  // auto-hidden: shown again at a move. Shown at once, it flashed up on each
+  // release (a pad press after mouse look), and exclusive full screen kept
+  // drawing it after the app hid it again a moment later.
+  window->SetCursorVisibility(precapture_cursor_visibility_ == rex::ui::Window::CursorVisibility::kVisible
+                                  ? rex::ui::Window::CursorVisibility::kAutoHidden
+                                  : precapture_cursor_visibility_);
   window->SetRelativeMouseMode(false);
   relative_mouse_mode_ = false;
   window->ReleaseMouse();
