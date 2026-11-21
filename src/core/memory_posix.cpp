@@ -189,36 +189,14 @@ static bool FindEntryForAddress(void* address, LinuxMapEntry& out_entry) {
   return false;
 }
 
-// Check if [base, base+length) is fully covered by existing mappings (no gaps)
+// Check if [base, base+length) is fully covered by existing mappings (no gaps).
+// msync fails with ENOMEM where a page in the range isn't mapped, and MS_ASYNC
+// writes nothing back: a single system call, where reading /proc/self/maps for
+// each commit on a reserved range was hundreds a second in play.
 static bool IsRangeFullyMapped(void* base_address, size_t length) {
   if (!base_address || length == 0)
     return false;
-
-  const uintptr_t begin = reinterpret_cast<uintptr_t>(base_address);
-  const uintptr_t end = begin + length;
-  if (end < begin) {  // overflow check
-    return false;
-  }
-
-  std::ifstream maps("/proc/self/maps");
-  if (!maps.is_open())
-    return false;
-
-  uintptr_t cursor = begin;
-  std::string line;
-  while (std::getline(maps, line)) {
-    LinuxMapEntry e;
-    if (!ParseProcMapsLine(line, e))
-      continue;
-    if (e.end <= cursor)
-      continue;
-    if (e.start > cursor)
-      return false;  // gap found
-    cursor = e.end;
-    if (cursor >= end)
-      return true;
-  }
-  return cursor >= end;
+  return msync(base_address, length, MS_ASYNC) == 0;
 }
 
 // Convert /proc/self/maps permission chars to PageAccess
