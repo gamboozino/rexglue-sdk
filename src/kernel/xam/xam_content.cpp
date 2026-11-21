@@ -160,16 +160,16 @@ u32 xeXamContentCreate(u32 user_index, mapped_string root_name, mapped_void cont
         // Close any existing mount under this root name first.
         // Games may reuse the same root without explicitly closing.
         content_manager->CloseContent(root_name);
-        if (content_manager->ContentExists(xuid, content_data)) {
-          content_manager->DeleteContent(xuid, content_data);
+        // A package that can't be deleted (a file in it held open a moment,
+        // on Windows by antivirus or sync) is opened and written over
+        // instead: the save still goes through.
+        if (content_manager->ContentExists(xuid, content_data) &&
+            content_manager->DeleteContent(xuid, content_data) != X_ERROR_SUCCESS) {
+          disposition = content_manager->ContentExists(xuid, content_data) ? kDispositionState::Open
+                                                                           : kDispositionState::Create;
+          break;
         }
-        // Check filesystem state after deletion attempt to decide
-        // whether to create fresh or open existing.
-        if (content_manager->ContentExists(xuid, content_data)) {
-          disposition = kDispositionState::Open;
-        } else {
-          disposition = kDispositionState::Create;
-        }
+        disposition = kDispositionState::Create;
         break;
       case 3:  // OPEN_EXISTING
                // Open only if exists.
@@ -193,9 +193,10 @@ u32 xeXamContentCreate(u32 user_index, mapped_string root_name, mapped_void cont
           result = X_ERROR_PATH_NOT_FOUND;
         } else {
           content_manager->CloseContent(root_name);
-          content_manager->DeleteContent(xuid, content_data);
-          if (content_manager->ContentExists(xuid, content_data)) {
-            disposition = kDispositionState::Open;
+          if (content_manager->DeleteContent(xuid, content_data) != X_ERROR_SUCCESS) {
+            // As CREATE_ALWAYS: opened and written over.
+            disposition = content_manager->ContentExists(xuid, content_data) ? kDispositionState::Open
+                                                                             : kDispositionState::Create;
           } else {
             disposition = kDispositionState::Create;
           }
