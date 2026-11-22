@@ -73,6 +73,13 @@ class InputSystem : public system::IInputSystem {
   std::unique_ptr<DeviceAssignment> assignment_;
   ActiveDeviceTracker active_devices_;
   std::array<std::atomic<uint8_t>, kMaxGuestUsers> active_kind_{};
+  // input_last_used_only: each device's state at its last read, and the
+  // device last used by each user (the last to change while off neutral).
+  std::vector<std::pair<DeviceId, X_INPUT_GAMEPAD>> last_seen_;
+  std::array<DeviceId, kMaxGuestUsers> last_used_{};
+  // The keyboard pressed while a controller is in use: 1 pressed, 2 pressed
+  // and let go (its next press takes over).
+  std::array<uint8_t, kMaxGuestUsers> keyboard_armed_{};
 
   // Ordered by ordinal. Ordinals are never recycled, so unplugging pad one
   // does not renumber pad two.

@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 
 #include <rex/dbg.h>
 #include <rex/input/device_assignment.h>
@@ -28,6 +29,9 @@ REXCVAR_DEFINE_STRING(input_backend, "sdl", "Input", "Input backend: sdl, xinput
     .allowed({"sdl", "xinput"});
 
 REXCVAR_DEFINE_BOOL(guide_button, false, "Input", "Enable guide button pass-through");
+REXCVAR_DEFINE_BOOL(input_last_used_only, false, "Input",
+                    "Only the keyboard and mouse, or only the controllers, whichever was used last "
+                    "(a key doesn't press anything while a controller is in use, and the other way round)");
 namespace rex::input {
 
 namespace {
@@ -229,8 +233,14 @@ X_RESULT InputSystem::GetState(uint32_t user_index, X_INPUT_STATE* out_state) {
   std::vector<DeviceId> ids;
   assignment_->DevicesForUser(user_index, ids);
 
-  X_INPUT_STATE merged = {};
-  bool any = false;
+  // Every device's state first: the one in use is known before they are
+  // merged.
+  struct Read {
+    DeviceId id;
+    X_INPUT_STATE state;
+    bool keyboard;
+  };
+  std::vector<Read> reads;
   for (DeviceId id : ids) {
     auto* driver = DriverForDevice(id);
     if (!driver) {
@@ -241,16 +251,86 @@ X_RESULT InputSystem::GetState(uint32_t user_index, X_INPUT_STATE* out_state) {
       continue;
     }
     active_devices_.Observe(user_index, id, state.gamepad);
-    if (active_devices_.Active(user_index) == id && user_index < kMaxGuestUsers) {
-      if (const DeviceInfo* info = DeviceInfoFor(id)) {
+    const DeviceInfo* info = DeviceInfoFor(id);
+    // (with input_last_used_only the prompts follow its device instead, below)
+    if (!REXCVAR_GET(input_last_used_only) && active_devices_.Active(user_index) == id &&
+        user_index < kMaxGuestUsers && info) {
+      active_kind_[user_index].store(uint8_t(info->kind), std::memory_order_relaxed);
+    }
+    reads.push_back({id, state, info && info->kind == DeviceKind::kKeyboard});
+  }
+
+  // input_last_used_only: the keyboard and mouse alone while they are in use,
+  // else the controllers alone (all of them while none has been used yet).
+  // In use: the last device whose state changed while off neutral (a press,
+  // a stick moved), so a key held down doesn't keep a controller out. While a
+  // controller is in use a key or click only arms the keyboard (and does
+  // nothing): it takes over with its next press, after its keys were let
+  // go, unless the controller was used in between. A key bumped while
+  // playing on a controller presses nothing and leaves the controller as it
+  // was.
+  bool only = REXCVAR_GET(input_last_used_only) && user_index < kMaxGuestUsers;
+  DeviceId active = DeviceId::kInvalid;
+  if (only) {
+    bool controllerInUse = false;
+    for (const Read& read : reads) {
+      controllerInUse |= read.id == last_used_[user_index] && !read.keyboard;
+    }
+    uint8_t& armed = keyboard_armed_[user_index];  // 0, 1 pressed, 2 pressed and let go
+    for (const Read& read : reads) {
+      auto seen = std::find_if(last_seen_.begin(), last_seen_.end(),
+                               [&](const auto& entry) { return entry.first == read.id; });
+      bool changed = seen == last_seen_.end() ||
+                     std::memcmp(&seen->second, &read.state.gamepad, sizeof(X_INPUT_GAMEPAD)) != 0;
+      bool pressed = changed && !IsNeutral(read.state.gamepad);
+      // (let go: its keys and buttons, not the mouse's camera)
+      X_INPUT_GAMEPAD keys = read.state.gamepad;
+      keys.thumb_rx = 0;
+      keys.thumb_ry = 0;
+      if (read.keyboard && controllerInUse) {
+        if (armed == 0 && pressed) {
+          armed = 1;
+        } else if (armed == 1 && IsNeutral(keys)) {
+          armed = 2;
+        } else if (armed == 2 && pressed) {
+          last_used_[user_index] = read.id;
+          armed = 0;
+        }
+      } else if (pressed) {
+        last_used_[user_index] = read.id;
+        armed = 0;
+      }
+      if (seen == last_seen_.end()) {
+        last_seen_.emplace_back(read.id, read.state.gamepad);
+      } else {
+        seen->second = read.state.gamepad;
+      }
+    }
+    active = last_used_[user_index];
+  }
+  bool keyboardActive = false;
+  bool activeKnown = false;
+  for (const Read& read : reads) {
+    if (read.id == active) {
+      keyboardActive = read.keyboard;
+      activeKnown = true;
+      // (the prompts follow the same device)
+      if (const DeviceInfo* info = DeviceInfoFor(read.id)) {
         active_kind_[user_index].store(uint8_t(info->kind), std::memory_order_relaxed);
       }
     }
+  }
+  X_INPUT_STATE merged = {};
+  bool any = false;
+  for (const Read& read : reads) {
+    if (only && activeKnown && read.keyboard != keyboardActive) {
+      continue;
+    }
     if (!any) {
-      merged = state;
+      merged = read.state;
       any = true;
     } else {
-      MergeInto(merged, state);
+      MergeInto(merged, read.state);
     }
   }
 
