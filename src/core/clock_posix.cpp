@@ -26,13 +26,12 @@ uint64_t Clock::host_tick_frequency_platform() {
   mach_timebase_info(&info);
   return (uint64_t)((1000000000ull * (uint64_t)info.denom) / (uint64_t)info.numer);
 #else
-  timespec res;
-  int error = clock_getres(CLOCK_MONOTONIC_RAW, &res);
-  assert_zero(error);
-  assert_zero(res.tv_sec);  // Sub second resolution is required.
-
-  // Convert nano seconds to hertz. Resolution is 1ns on most systems.
-  return 1000000000ull / res.tv_nsec;
+  // host_tick_count_platform() counts nanoseconds, whatever the clock's
+  // resolution: the frequency is 1 GHz. (clock_getres is the step between
+  // readings, not their unit: on a kernel without high resolution timers it
+  // is the tick, 1-4 ms, and a frequency taken from it made every guest
+  // duration a million times too long, e.g. menus repeating each frame.)
+  return 1000000000ull;
 #endif
 }
 
