@@ -10,12 +10,23 @@
 
 namespace rex::ppc {
 
+namespace {
+thread_local bool t_quiet = false;
+}
+
+void SetSpinBackoffQuiet(bool quiet) noexcept {
+  t_quiet = quiet;
+}
+
 void SpinBackoff() noexcept {
 #if defined(__x86_64__) || defined(_M_X64)
   __builtin_ia32_pause();
 #elif defined(__aarch64__) || defined(_M_ARM64)
   __asm__ __volatile__("yield");
 #endif
+  if (t_quiet) {
+    return;  // (the caller paces the wait itself)
+  }
   // A pause for the first 50 us of a wait (a handoff between threads answers
   // at once), a yield each time after. A call more than 200 us after the
   // thread's last one starts a new wait.

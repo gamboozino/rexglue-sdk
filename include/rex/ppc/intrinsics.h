@@ -402,6 +402,9 @@ inline simde__m128i simde_mm_sllv_epi8(simde__m128i a, simde__m128i count) {
 // threads, many a frame. Out of line (src/system/spin_backoff.cpp). (After
 // IzunaRecomp v0.2.2.1.)
 void SpinBackoff() noexcept;
+// While set on a thread, SpinBackoff only pauses: for a hook that paces a
+// guest wait itself (sleeps between its steps).
+void SetSpinBackoffQuiet(bool quiet) noexcept;
 inline void db16cyc() { SpinBackoff(); }
 
 }  // namespace rex::ppc
