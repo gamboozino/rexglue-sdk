@@ -196,6 +196,9 @@ bool build_fdivs(BuilderContext& ctx) {
 //=============================================================================
 // Fused Multiply-Add
 //=============================================================================
+// The single-precision forms go through REX_FMA_SINGLE (rex/ppc/intrinsics.h):
+// std::fma where the host has the instruction, a multiply and an add in
+// double precision where it doesn't.
 
 bool build_fmadd(BuilderContext& ctx) {
   ctx.emit_set_flush_mode(false);
@@ -207,7 +210,7 @@ bool build_fmadd(BuilderContext& ctx) {
 
 bool build_fmadds(BuilderContext& ctx) {
   ctx.emit_set_flush_mode(false);
-  ctx.println("\t{}.f64 = double(float(std::fma({}.f64, {}.f64, {}.f64)));",
+  ctx.println("\t{}.f64 = double(float(REX_FMA_SINGLE({}.f64, {}.f64, {}.f64)));",
               ctx.f(ctx.insn.operands[0]), ctx.f(ctx.insn.operands[1]), ctx.f(ctx.insn.operands[2]),
               ctx.f(ctx.insn.operands[3]));
   return true;
@@ -223,7 +226,7 @@ bool build_fmsub(BuilderContext& ctx) {
 
 bool build_fmsubs(BuilderContext& ctx) {
   ctx.emit_set_flush_mode(false);
-  ctx.println("\t{}.f64 = double(float(std::fma({}.f64, {}.f64, -{}.f64)));",
+  ctx.println("\t{}.f64 = double(float(REX_FMA_SINGLE({}.f64, {}.f64, -{}.f64)));",
               ctx.f(ctx.insn.operands[0]), ctx.f(ctx.insn.operands[1]), ctx.f(ctx.insn.operands[2]),
               ctx.f(ctx.insn.operands[3]));
   return true;
@@ -239,7 +242,7 @@ bool build_fnmadd(BuilderContext& ctx) {
 
 bool build_fnmadds(BuilderContext& ctx) {
   ctx.emit_set_flush_mode(false);
-  ctx.println("\t{}.f64 = double(float(-std::fma({}.f64, {}.f64, {}.f64)));",
+  ctx.println("\t{}.f64 = double(float(-REX_FMA_SINGLE({}.f64, {}.f64, {}.f64)));",
               ctx.f(ctx.insn.operands[0]), ctx.f(ctx.insn.operands[1]), ctx.f(ctx.insn.operands[2]),
               ctx.f(ctx.insn.operands[3]));
   return true;
@@ -255,7 +258,7 @@ bool build_fnmsub(BuilderContext& ctx) {
 
 bool build_fnmsubs(BuilderContext& ctx) {
   ctx.emit_set_flush_mode(false);
-  ctx.println("\t{}.f64 = double(float(-std::fma({}.f64, {}.f64, -{}.f64)));",
+  ctx.println("\t{}.f64 = double(float(-REX_FMA_SINGLE({}.f64, {}.f64, -{}.f64)));",
               ctx.f(ctx.insn.operands[0]), ctx.f(ctx.insn.operands[1]), ctx.f(ctx.insn.operands[2]),
               ctx.f(ctx.insn.operands[3]));
   return true;

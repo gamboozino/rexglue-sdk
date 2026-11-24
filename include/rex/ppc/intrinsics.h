@@ -393,6 +393,26 @@ inline simde__m128i simde_mm_sllv_epi8(simde__m128i a, simde__m128i count) {
   return simde_mm_packus_epi16(r_lo, r_hi);
 }
 
+// The single-precision fused multiply-adds (fmadds, fmsubs, fnmadds,
+// fnmsubs): the result is rounded to single, so on a host without an FMA
+// instruction (x86-64 before Haswell and Piledriver: a build for x86-64-v2)
+// the product and sum are made in double precision instead of with the C
+// library's fma, which computes it in software there (several times slower:
+// the XAudio2 mixer is mostly these, and a CPU without FMA spent most of its
+// audio threads' time in it). With single-precision operands the product is
+// exact in double; the sum then rounds once to double and once to single,
+// which differs from the fused result only when that double lies exactly
+// between two singles. The double-precision forms keep std::fma.
+#if defined(__FMA__) || !(defined(__x86_64__) || defined(_M_X64))
+inline double FmaSingle(double a, double b, double c) noexcept {
+  return std::fma(a, b, c);
+}
+#else
+inline double FmaSingle(double a, double b, double c) noexcept {
+  return a * b + c;
+}
+#endif
+
 // db16cyc: the guest's spin hint ("waiting, low priority"), and the head of
 // each loop the recompiler finds only reading memory until another thread
 // changes it (REX_SPIN_WAIT, function_graph.cpp). On the Xbox 360 such a wait
@@ -415,6 +435,7 @@ inline void db16cyc() { SpinBackoff(); }
 // Vector mask tables accessible from global scope for generated code
 using rex::ppc::VectorMaskL;
 #define ppc_db16cyc() ::rex::ppc::db16cyc()
+#define REX_FMA_SINGLE(a, b, c) ::rex::ppc::FmaSingle(a, b, c)
 using rex::ppc::VectorMaskR;
 using rex::ppc::VectorShiftTableL;
 using rex::ppc::VectorShiftTableR;
