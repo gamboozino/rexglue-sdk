@@ -48,10 +48,14 @@ bool BuilderContext::localizeNonVolatiles() const {
   return config().nonVolatileRegistersAsLocalVariables && !fn.sharesRegisters();
 }
 
+// The same for the non-argument scratch registers: an SEH funclet gets its
+// owner's frame in r12.
+bool BuilderContext::localizeNonArguments() const {
+  return config().nonArgumentRegistersAsLocalVariables && !fn.sharesRegisters();
+}
+
 std::string BuilderContext::r(size_t index) {
-  const auto& cfg = config();
-  if ((cfg.nonArgumentRegistersAsLocalVariables &&
-       (index == 0 || index == 2 || index == 11 || index == 12)) ||
+  if ((localizeNonArguments() && (index == 0 || index == 2 || index == 11 || index == 12)) ||
       (localizeNonVolatiles() && index >= 14)) {
     locals.r[index] = true;
     return fmt::format("r{}", index);
@@ -60,8 +64,7 @@ std::string BuilderContext::r(size_t index) {
 }
 
 std::string BuilderContext::f(size_t index) {
-  const auto& cfg = config();
-  if ((cfg.nonArgumentRegistersAsLocalVariables && index == 0) ||
+  if ((localizeNonArguments() && index == 0) ||
       (localizeNonVolatiles() && index >= 14)) {
     locals.f[index] = true;
     return fmt::format("f{}", index);
@@ -74,7 +77,7 @@ std::string BuilderContext::v(size_t index) {
   if (index < cfg.sharedVectorRegisters.size() && cfg.sharedVectorRegisters.test(index)) {
     return fmt::format("ctx.v{}", index);
   }
-  if ((cfg.nonArgumentRegistersAsLocalVariables && (index >= 32 && index <= 63)) ||
+  if ((localizeNonArguments() && (index >= 32 && index <= 63)) ||
       (localizeNonVolatiles() && ((index >= 14 && index <= 31) || (index >= 64 && index <= 127)))) {
     locals.v[index] = true;
     return fmt::format("v{}", index);
@@ -214,18 +217,32 @@ void BuilderContext::emit_function_call(uint32_t address) {
       // An SEH funclet runs on its owner's frame and reads whatever non-volatiles
       // the owner left live, so hand it the localized copies through ctx and take
       // them back afterwards. Only registers already localized here can be live at
-      // this point, so that set is the whole live-in the funclet can see.
-      if (targetFn->sharesRegisters() && localizeNonVolatiles()) {
-        for (size_t i = 14; i < 32; ++i) {
-          if (locals.r[i])
-            println("\tctx.r{} = r{};", i, i);
+      // this point, so that set is the whole live-in the funclet can see. The
+      // non-argument registers likewise: the owner passes its frame in r12.
+      if (targetFn->sharesRegisters() && (localizeNonVolatiles() || localizeNonArguments())) {
+        // (the non-argument ones always: one used only after the call, where the
+        // funclet hands back a value in it, isn't marked yet at this point)
+        if (localizeNonArguments()) {
+          for (size_t i : {0, 2, 11, 12})
+            locals.r[i] = true;
+          locals.f[0] = true;
         }
+        auto copy = [&](bool toCtx) {
+          for (size_t i = 0; i < 32; ++i) {
+            if (locals.r[i] && (i >= 14 || i == 0 || i == 2 || i == 11 || i == 12))
+              toCtx ? println("\tctx.r{} = r{};", i, i) : println("\tr{} = ctx.r{};", i, i);
+          }
+          if (locals.f[0])
+            toCtx ? println("\tctx.f0 = f0;") : println("\tf0 = ctx.f0;");
+          for (size_t i = 32; i < 64; ++i) {
+            if (locals.v[i])
+              toCtx ? println("\tctx.v{} = v{};", i, i) : println("\tv{} = ctx.v{};", i, i);
+          }
+        };
+        copy(true);
         emitCtx.reference(name);
         println("\t{}(ctx, base);", name);
-        for (size_t i = 14; i < 32; ++i) {
-          if (locals.r[i])
-            println("\tr{} = ctx.r{};", i, i);
-        }
+        copy(false);
         return;
       }
 

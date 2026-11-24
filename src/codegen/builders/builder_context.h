@@ -113,6 +113,7 @@ struct BuilderContext {
    * False when the function shares registers with an intra-function bl partner.
    */
   bool localizeNonVolatiles() const;
+  bool localizeNonArguments() const;
 
   /**
    * @brief Get expression for general-purpose register access.
