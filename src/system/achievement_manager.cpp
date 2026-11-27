@@ -129,6 +129,15 @@ std::optional<AchievementInfo> AchievementManager::FindAchievement(uint32_t id) 
 
 AchievementUnlockResult AchievementManager::UnlockAchievement(
     uint32_t id, AchievementNotification notification) {
+  AchievementUnlockFilter filter;
+  {
+    std::lock_guard lock(mutex_);
+    filter = unlock_filter_;
+  }
+  if (filter && !IsUnlocked(id) && !filter(id)) {
+    REXSYS_INFO("Achievement {:08X} not unlocked: refused by the title's filter", id);
+    return AchievementUnlockResult::kBlocked;
+  }
   AchievementEvent event;
   {
     std::lock_guard lock(mutex_);
@@ -154,6 +163,11 @@ AchievementUnlockResult AchievementManager::UnlockAchievement(
     DispatchCallbacks(notification_callbacks_, event);
   }
   return AchievementUnlockResult::kUnlocked;
+}
+
+void AchievementManager::SetUnlockFilter(AchievementUnlockFilter filter) {
+  std::lock_guard lock(mutex_);
+  unlock_filter_ = std::move(filter);
 }
 
 bool AchievementManager::ShowAchievementNotification(uint32_t id) {

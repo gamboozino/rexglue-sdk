@@ -37,10 +37,14 @@ enum class AchievementUnlockResult {
   kUnlocked,
   kAlreadyUnlocked,
   kUnknownAchievement,
+  kBlocked,  // the unlock filter refused it
 };
 
 using AchievementListenerHandle = uint64_t;
 using AchievementCallback = std::function<void(const AchievementEvent&)>;
+// Asked before an achievement is unlocked: false keeps it locked (a title's
+// cheats, say). Called on the unlocking thread, without the manager's lock.
+using AchievementUnlockFilter = std::function<bool(uint32_t id)>;
 
 class AchievementManager {
  public:
@@ -70,6 +74,8 @@ class AchievementManager {
   AchievementListenerHandle RegisterNotificationCallback(AchievementCallback callback);
   void UnregisterCallback(AchievementListenerHandle handle);
 
+  void SetUnlockFilter(AchievementUnlockFilter filter);
+
   void SetUnlockSavePath(std::filesystem::path path);
   void LoadUnlockState();
   void SaveUnlockState() const;
@@ -89,6 +95,7 @@ class AchievementManager {
   std::unordered_map<AchievementListenerHandle, AchievementCallback> unlock_callbacks_;
   std::unordered_map<AchievementListenerHandle, AchievementCallback> notification_callbacks_;
   AchievementListenerHandle next_listener_handle_ = 1;
+  AchievementUnlockFilter unlock_filter_;
 };
 
 }  // namespace rex::system
